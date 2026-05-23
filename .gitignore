@@ -33,5 +33,11 @@ build/
 .vscode/
 .idea/
 
+# Virtual environment
+.venv/
+
+# Claude Code memory
+.claude/
+
 # Internal planning notes
 first_prompt

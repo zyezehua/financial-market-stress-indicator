@@ -45,6 +45,38 @@ class StressEnsemble:
         return avg.sort_values(ascending=False)
 
 
+class StressClassEnsemble:
+    """
+    Soft-voting ensemble for 4-class stress classification (Low/Elevated/High/Extreme).
+    Uses balanced class weights in each base model to recover Low and Extreme recall.
+    """
+
+    LABELS = ["Low", "Elevated", "High", "Extreme"]
+    REVERSE_MAP = {0: "Low", 1: "Elevated", 2: "High", 3: "Extreme"}
+
+    def __init__(self, lgbm, xgb, ridge, weights: dict = None):
+        self.models = {"lgbm": lgbm, "xgb": xgb, "ridge": ridge}
+        self.weights = weights or DEFAULT_WEIGHTS
+
+    def predict_proba(self, X: pd.DataFrame) -> np.ndarray:
+        proba = np.zeros((len(X), 4))
+        total_w = 0.0
+        for name, model in self.models.items():
+            w = self.weights.get(name, 0.0)
+            if w == 0 or model is None:
+                continue
+            proba += w * model.predict_proba(X)
+            total_w += w
+        if total_w > 0:
+            proba /= total_w
+        return proba
+
+    def predict(self, X: pd.DataFrame) -> np.ndarray:
+        proba = self.predict_proba(X)
+        encoded = np.argmax(proba, axis=1)
+        return np.array([self.REVERSE_MAP[e] for e in encoded])
+
+
 class DirectionEnsemble:
     """
     Soft-voting ensemble for 3-class direction prediction.

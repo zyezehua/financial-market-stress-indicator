@@ -105,9 +105,15 @@ def build_csi(
     percentile_window: int = 756,
     labels_dir: str = "data/labels",
     save: bool = True,
+    regime_detector=None,
 ) -> pd.DataFrame:
     """
     Build the Composite Stress Index from the feature matrix.
+
+    Parameters
+    ----------
+    regime_detector : optional fitted RegimeDetector; when provided, dimension
+                      weights are adjusted per-day based on the detected regime.
 
     Returns
     -------
@@ -115,6 +121,7 @@ def build_csi(
         csi_equity, csi_credit, csi_rates, csi_liquidity, csi_fx, csi_international
         csi_composite  : weighted average of dimension scores
         csi_class      : Low / Elevated / High / Extreme
+        csi_regime     : 0/1/2 regime label (only present when regime_detector provided)
     """
     weights = weights or DEFAULT_WEIGHTS
     dim_scores = {}
@@ -126,11 +133,41 @@ def build_csi(
 
     result = pd.DataFrame(dim_scores, index=features.index)
 
-    # Weighted composite
-    composite = sum(
-        result[f"csi_{dim}"] * w for dim, w in weights.items()
-        if f"csi_{dim}" in result
-    )
+    # Weighted composite (regime-conditioned if detector provided)
+    if regime_detector is not None:
+        try:
+            from src.models.regime_detector import get_regime_weights
+            # First pass: compute composite with default weights to get regime labels
+            base_composite = sum(
+                result[f"csi_{dim}"] * w for dim, w in weights.items()
+                if f"csi_{dim}" in result
+            ).clip(0, 100)
+            regimes = regime_detector.predict(base_composite)
+            result["csi_regime"] = regimes
+
+            # Second pass: compute composite with per-day regime weights
+            composite = pd.Series(0.0, index=result.index)
+            for regime_id in range(3):
+                mask = regimes == regime_id
+                if not mask.any():
+                    continue
+                rw = get_regime_weights(regime_id)
+                for dim, w in rw.items():
+                    col = f"csi_{dim}"
+                    if col in result:
+                        composite[mask] += result.loc[mask, col] * w
+            logger.info("CSI built with regime-conditioned weights.")
+        except Exception as exc:
+            logger.warning("Regime-conditioned weighting failed (%s); using defaults.", exc)
+            composite = sum(
+                result[f"csi_{dim}"] * w for dim, w in weights.items()
+                if f"csi_{dim}" in result
+            )
+    else:
+        composite = sum(
+            result[f"csi_{dim}"] * w for dim, w in weights.items()
+            if f"csi_{dim}" in result
+        )
     result["csi_composite"] = composite.clip(0, 100)
 
     # Classification

@@ -87,4 +87,32 @@ def compute_equity_features(prices: pd.DataFrame, macro: pd.DataFrame) -> pd.Dat
         # Positive correlation (both falling) = systemic stress
         feat["eq_spy_tlt_corr_positive"] = (corr_21 > 0).astype(float)
 
+    # ── CBOE SKEW index (tail risk / OTM put demand) ───────────────────────
+    # SKEW > 130 signals elevated tail risk; rising SKEW = market buying downside protection
+    if "^SKEW" in prices.columns:
+        skew = prices["^SKEW"].copy().ffill()
+        feat["eq_skew_level"] = skew
+        feat["eq_skew_pct_rank_252d"] = _rolling_pct_rank(skew, 252)
+        feat["eq_skew_mom_21d"] = skew.pct_change(21)
+        # Divergence: high SKEW + low VIX = "hidden" tail risk accumulation
+        if "^VIX" in prices.columns:
+            vix = prices["^VIX"]
+            skew_vix_ratio = skew / vix.replace(0, np.nan)
+            feat["eq_skew_vix_ratio"] = skew_vix_ratio
+            feat["eq_skew_vix_ratio_pct_rank_252d"] = _rolling_pct_rank(skew_vix_ratio, 252)
+
+    # ── CBOE OVX (crude oil volatility) ───────────────────────────────────
+    # OVX spike signals commodity/EM stress and often leads equity stress
+    if "^OVX" in prices.columns:
+        ovx = prices["^OVX"].copy().ffill()
+        feat["eq_ovx_level"] = ovx
+        feat["eq_ovx_pct_rank_252d"] = _rolling_pct_rank(ovx, 252)
+        feat["eq_ovx_mom_5d"] = ovx.pct_change(5)
+        feat["eq_ovx_mom_21d"] = ovx.pct_change(21)
+        # OVX relative to VIX: ratio > 2 typically signals commodity-specific stress
+        if "^VIX" in prices.columns:
+            ovx_vix_ratio = ovx / prices["^VIX"].replace(0, np.nan)
+            feat["eq_ovx_vix_ratio"] = ovx_vix_ratio
+            feat["eq_ovx_vix_ratio_pct_rank_252d"] = _rolling_pct_rank(ovx_vix_ratio, 252)
+
     return feat.ffill().bfill()

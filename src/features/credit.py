@@ -43,11 +43,24 @@ def compute_credit_features(prices: pd.DataFrame, macro: pd.DataFrame) -> pd.Dat
         feat["cr_ig_oas_pct_rank_252d"] = _rolling_pct_rank(ig_oas, 252)
         feat["cr_ig_oas_z_63d"] = (ig_oas - ig_oas.rolling(63).mean()) / ig_oas.rolling(63).std()
 
+    # ── AAA OAS (highest-quality credit spread) ───────────────────────────
+    if "BAMLC0A1CAAA" in macro.columns:
+        aaa_oas = macro["BAMLC0A1CAAA"]
+        feat["cr_aaa_oas"] = aaa_oas
+        feat["cr_aaa_oas_pct_rank_252d"] = _rolling_pct_rank(aaa_oas, 252)
+        feat["cr_aaa_oas_mom_21d"] = aaa_oas.diff(21)
+
     # ── HY minus IG spread (pure credit risk premium) ─────────────────────
     if "BAMLH0A0HYM2" in macro.columns and "BAMLC0A0CM" in macro.columns:
         hy_ig_spread = macro["BAMLH0A0HYM2"] - macro["BAMLC0A0CM"]
         feat["cr_hy_ig_spread"] = hy_ig_spread
         feat["cr_hy_ig_spread_pct_rank_252d"] = _rolling_pct_rank(hy_ig_spread, 252)
+
+    # ── IG minus AAA spread (BBB/single-A stress premium) ────────────────
+    if "BAMLC0A0CM" in macro.columns and "BAMLC0A1CAAA" in macro.columns:
+        ig_aaa_spread = macro["BAMLC0A0CM"] - macro["BAMLC0A1CAAA"]
+        feat["cr_ig_aaa_spread"] = ig_aaa_spread
+        feat["cr_ig_aaa_spread_pct_rank_252d"] = _rolling_pct_rank(ig_aaa_spread, 252)
 
     # ── ETF-based credit features (HYG, LQD) ──────────────────────────────
     if "HYG" in prices.columns:

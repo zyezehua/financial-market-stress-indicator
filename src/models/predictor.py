@@ -81,13 +81,21 @@ def predict_latest(
 
         stress_ens = artifact["stress_ensemble"]
         stress_pred = float(stress_ens.predict(X_aligned)[0])
-        stress_class = _classify(stress_pred)
+
+        # Use StressClassEnsemble (balanced) for stress_class if available
+        stress_class_ens = artifact.get("stress_class_ensemble")
+        if stress_class_ens is not None:
+            stress_class = str(stress_class_ens.predict(X_aligned)[0])
+        else:
+            stress_class = _classify(stress_pred)
+
         stress_delta = stress_pred - current_csi if not np.isnan(current_csi) else np.nan
 
         dir_result = {}
-        dir_ens = artifact.get("direction_ensemble")
+        # Prefer DownRiskEnsemble; fall back to plain DirectionEnsemble
+        dir_ens = artifact.get("down_risk_ensemble") or artifact.get("direction_ensemble")
         if dir_ens is not None:
-            dir_pred = int(dir_ens.predict(X_aligned)[0])
+            dir_pred  = int(dir_ens.predict(X_aligned)[0])
             dir_proba = dir_ens.predict_proba(X_aligned)[0]
             dir_result = {
                 "market_direction":     DIRECTION_LABELS[dir_pred],
@@ -146,9 +154,16 @@ def predict_historical(
     X = feat_slice.reindex(columns=feat_names, fill_value=0)
     preds = stress_ens.predict(X)
 
+    # Use StressClassEnsemble for class labels if available
+    stress_class_ens = artifact.get("stress_class_ensemble")
+    if stress_class_ens is not None:
+        class_preds = list(stress_class_ens.predict(X))
+    else:
+        class_preds = [_classify(p) for p in preds]
+
     result = pd.DataFrame({
         "stress_score_pred": preds,
-        "stress_class_pred": [_classify(p) for p in preds],
+        "stress_class_pred": class_preds,
     }, index=feat_slice.index)
 
     if "csi_composite" in csi.columns:

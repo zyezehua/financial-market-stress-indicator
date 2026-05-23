@@ -35,6 +35,7 @@ from src.explainability.factor_attribution import (
 from src.explainability.narrative import generate_narrative
 from src.reporting.html_dashboard import generate_html
 from src.reporting.pdf_generator import generate_pdf
+from src.monitoring.drift_detector import compute_psi, log_drift_report
 
 logging.basicConfig(
     level=logging.INFO,
@@ -104,6 +105,14 @@ def run(date: str = None, use_llm: bool = False, gen_pdf: bool = True, gen_html:
         except Exception as exc:
             logger.warning("SHAP failed for horizon %dd: %s", h, exc)
             attribution_by_horizon[h] = []
+
+    # ── 5b. PSI drift check ────────────────────────────────────────────────
+    logger.info("Step 5b: Running PSI drift check ...")
+    try:
+        psi_df = compute_psi(features, monitor_window=63, reference_window=756)
+        log_drift_report(psi_df)
+    except Exception as exc:
+        logger.warning("PSI drift check failed: %s", exc)
 
     # ── 6. Generate narrative + reports ────────────────────────────────────
     logger.info("Step 6/6: Generating reports ...")

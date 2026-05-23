@@ -2,6 +2,8 @@
 LLM narrative generator (Claude API) for stress report explanations.
 
 When USE_LLM=False, generates structured rule-based text instead.
+When fetch_news=True, recent macro headlines are retrieved via Tavily and
+injected into the Claude prompt for grounded, current-event-aware narratives.
 """
 
 import logging
@@ -52,6 +54,16 @@ def _rule_based_narrative(
     return "\n".join(lines)
 
 
+def _fmt_news(news: List[dict]) -> str:
+    if not news:
+        return "  (no recent news available)"
+    lines = []
+    for a in news:
+        date = f" [{a['published_date']}]" if a.get("published_date") else ""
+        lines.append(f"  - {a['title']}{date}: {a['snippet']}")
+    return "\n".join(lines)
+
+
 def _llm_narrative(
     client,
     model: str,
@@ -61,8 +73,9 @@ def _llm_narrative(
     attribution_21d: List[dict],
     attribution_63d: List[dict],
     csi_history_stats: dict,
+    news_context: Optional[List[dict]] = None,
 ) -> str:
-    """Call Claude API to generate expert narrative."""
+    """Call Claude API to generate expert narrative, optionally grounded in recent news."""
 
     def fmt_attr(attr):
         return "\n".join(
@@ -83,12 +96,19 @@ def _llm_narrative(
             f"Up:{p.get('market_dir_proba', {}).get('Up', 'N/A')})"
         ) if p else "  Not available"
 
+    news_section = ""
+    if news_context is not None:
+        news_section = f"""
+Recent Macro Headlines (use these to ground your narrative in current events):
+{_fmt_news(news_context)}
+"""
+
     prompt = f"""You are a senior cross-asset financial strategist writing the daily market stress briefing.
 
 Current CSI (Composite Stress Index) Context:
 - Current Stress Score: {predictions.get(5, {}).get('current_csi', 'N/A')}/100
 - 1Y Average: {csi_history_stats.get('mean_1y', 'N/A'):.1f}, 1Y High: {csi_history_stats.get('max_1y', 'N/A'):.1f}
-
+{news_section}
 Predictions:
 SHORT-TERM (5-Day):
 {fmt_pred(5)}
@@ -111,6 +131,7 @@ Write a concise 3-paragraph stress briefing:
 3. Long-term structural view and risk monitoring priorities (2-3 sentences)
 
 Use clear, professional financial language. Reference specific indicators where relevant.
+Where recent headlines are provided, weave them into the narrative to explain current stress drivers.
 Do not repeat numbers verbatim from the data — synthesize and interpret."""
 
     response = client.messages.create(
@@ -131,16 +152,22 @@ def generate_narrative(
     api_key: Optional[str] = None,
     model: str = "claude-opus-4-7",
     max_tokens: int = 1024,
+    fetch_news: bool = False,
+    tavily_api_key: Optional[str] = None,
+    news_days_back: int = 7,
 ) -> str:
     """
     Generate the narrative explanation for the stress report.
 
     Parameters
     ----------
-    use_llm  : if True, calls Claude API; falls back to rule-based on error
-    api_key  : Anthropic API key (or reads ANTHROPIC_API_KEY env var)
+    use_llm        : if True, calls Claude API; falls back to rule-based on error
+    api_key        : Anthropic API key (or reads ANTHROPIC_API_KEY env var)
+    fetch_news     : if True, fetches recent macro headlines via Tavily and injects
+                     them into the Claude prompt for grounded, current-event-aware output
+    tavily_api_key : Tavily API key (or reads TAVILY_API_KEY env var)
+    news_days_back : how many days back to search for news
     """
-    # Compute trailing CSI stats for context
     csi_comp = csi["csi_composite"].dropna()
     csi_history_stats = {
         "mean_1y": float(csi_comp.tail(252).mean()),
@@ -160,6 +187,15 @@ def generate_narrative(
             predictions, attribution_5d, attribution_21d, attribution_63d, csi_history_stats
         )
 
+    news_context: Optional[List[dict]] = None
+    if fetch_news:
+        from .news_fetcher import fetch_macro_news
+        news_context = fetch_macro_news(
+            attribution=attribution_5d,
+            api_key=tavily_api_key,
+            days_back=news_days_back,
+        )
+
     try:
         import anthropic
         client = anthropic.Anthropic(api_key=key)
@@ -167,6 +203,7 @@ def generate_narrative(
             client, model, max_tokens,
             predictions, attribution_5d, attribution_21d, attribution_63d,
             csi_history_stats,
+            news_context=news_context,
         )
     except Exception as exc:
         logger.warning("Claude API call failed (%s). Falling back to rule-based narrative.", exc)

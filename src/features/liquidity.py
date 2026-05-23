@@ -57,6 +57,18 @@ def compute_liquidity_features(prices: pd.DataFrame, macro: pd.DataFrame) -> pd.
         feat["lq_sofr_level"] = sofr
         feat["lq_sofr_change_5d"] = sofr.diff(5)
 
+    # ── SOFR-OIS spread (SOFR vs Fed Funds rate) ───────────────────────────
+    # Secured vs unsecured overnight spread: pure credit-risk premium signal.
+    # Spikes during interbank stress (GFC repo squeeze, SVB money-market flight).
+    if "SOFR" in macro.columns and "DFF" in macro.columns:
+        sofr_ois = macro["SOFR"] - macro["DFF"]
+        feat["lq_sofr_ois_spread"] = sofr_ois
+        feat["lq_sofr_ois_spread_z_63d"] = (
+            (sofr_ois - sofr_ois.rolling(63).mean())
+            / sofr_ois.rolling(63).std()
+        )
+        feat["lq_sofr_ois_spread_pct_rank_252d"] = _rolling_pct_rank(sofr_ois, 252)
+
     # ── Cross-asset average pairwise correlation (contagion) ───────────────
     # High correlation across uncorrelated assets signals systemic stress/flight
     cross_assets = [c for c in ["SPY", "TLT", "HYG", "GLD", "EEM"] if c in prices.columns]

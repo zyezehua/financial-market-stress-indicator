@@ -69,6 +69,51 @@ def compute_rates_features(prices: pd.DataFrame, macro: pd.DataFrame) -> pd.Data
         if "DGS10" in macro.columns:
             feat["rt_t10y_3mo_spread"] = macro["DGS10"] - t3mo
 
+    # ── 5-Year and 30-Year yields ─────────────────────────────────────────
+    if "DGS5" in macro.columns:
+        t5 = macro["DGS5"]
+        feat["rt_t5y_level"] = t5
+        feat["rt_t5y_change_5d"] = t5.diff(5)
+
+    if "DGS30" in macro.columns:
+        t30 = macro["DGS30"]
+        feat["rt_t30y_level"] = t30
+        feat["rt_t30y_change_5d"] = t30.diff(5)
+
+    # ── Butterfly spread (5Y - 0.5*(2Y+10Y)) — curve concavity ──────────
+    # Negative butterfly = humped curve = anticipation of policy reversal
+    if all(c in macro.columns for c in ("DGS2", "DGS5", "DGS10")):
+        butterfly = macro["DGS5"] - 0.5 * (macro["DGS2"] + macro["DGS10"])
+        feat["rt_butterfly_2_5_10"] = butterfly
+        feat["rt_butterfly_pct_rank_252d"] = _rolling_pct_rank(butterfly, 252)
+
+    # ── 30Y-10Y term premium ──────────────────────────────────────────────
+    if "DGS10" in macro.columns and "DGS30" in macro.columns:
+        term_prem = macro["DGS30"] - macro["DGS10"]
+        feat["rt_t30y_t10y_spread"] = term_prem
+        feat["rt_t30y_t10y_pct_rank_252d"] = _rolling_pct_rank(term_prem, 252)
+
+    # ── 10Y TIPS real yield ───────────────────────────────────────────────
+    # Rising real yields tighten financial conditions → stress signal
+    if "DFII10" in macro.columns:
+        real_yield = macro["DFII10"]
+        feat["rt_tips10y_level"] = real_yield
+        feat["rt_tips10y_pct_rank_252d"] = _rolling_pct_rank(real_yield, 252)
+        feat["rt_tips10y_change_21d"] = real_yield.diff(21)
+        # Breakeven inflation = nominal 10Y - real 10Y
+        if "DGS10" in macro.columns:
+            breakeven = macro["DGS10"] - real_yield
+            feat["rt_breakeven_inflation"] = breakeven
+            feat["rt_breakeven_pct_rank_252d"] = _rolling_pct_rank(breakeven, 252)
+
+    # ── Mortgage spread (30Y mortgage - 10Y Treasury) ─────────────────────
+    # Widening mortgage spread signals housing/consumer financial stress
+    if "MORTGAGE30US" in macro.columns and "DGS10" in macro.columns:
+        mortgage_spread = macro["MORTGAGE30US"] - macro["DGS10"]
+        feat["rt_mortgage_spread"] = mortgage_spread
+        feat["rt_mortgage_spread_pct_rank_252d"] = _rolling_pct_rank(mortgage_spread, 252)
+        feat["rt_mortgage_spread_change_21d"] = mortgage_spread.diff(21)
+
     # ── TLT as MOVE proxy (bond market realized vol) ──────────────────────
     if "TLT" in prices.columns:
         tlt_ret = prices["TLT"].pct_change()

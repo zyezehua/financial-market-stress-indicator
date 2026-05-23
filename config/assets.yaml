@@ -7,6 +7,7 @@ yahoo:
     vix:         "^VIX"
     vix3m:       "^VIX3M"     # available from ~2011; proxy=VIX before that
     vvix:        "^VVIX"      # available from ~2012
+    skew:        "^SKEW"      # CBOE SKEW index (tail risk / OTM put demand)
     sector_etfs:
       - "XLF"   # Financials
       - "XLE"   # Energy
@@ -39,16 +40,22 @@ yahoo:
 fred:
   rates:
     t2y:     "DGS2"           # 2-Year Treasury Yield (daily)
+    t5y:     "DGS5"           # 5-Year Treasury Yield (daily)
     t10y:    "DGS10"          # 10-Year Treasury Yield (daily)
+    t30y:    "DGS30"          # 30-Year Treasury Yield (daily)
     t3mo:    "DGS3MO"         # 3-Month Treasury Yield (daily)
     t10y2y:  "T10Y2Y"         # 10Y minus 2Y spread (daily)
+    tips10y: "DFII10"         # 10Y TIPS real yield (daily)
+    mortgage: "MORTGAGE30US"  # 30-Year Fixed Mortgage Rate (weekly)
 
   credit:
     hy_oas:  "BAMLH0A0HYM2"  # HY Option-Adjusted Spread (daily)
     ig_oas:  "BAMLC0A0CM"    # IG Option-Adjusted Spread (daily)
+    aaa_oas: "BAMLC0A1CAAA"  # AAA corporate OAS (daily)
 
   liquidity:
     sofr:    "SOFR"           # Secured Overnight Financing Rate (daily)
+    dff:     "DFF"            # Effective Federal Funds Rate (overnight unsecured — OIS proxy)
 
   benchmark:
     fsi:     "STLFSI4"        # St. Louis Fed Financial Stress Index (weekly)
