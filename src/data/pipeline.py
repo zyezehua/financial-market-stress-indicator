@@ -98,16 +98,47 @@ class DataPipeline:
         return {"prices": prices, "macro": macro}
 
     def update(self) -> Dict[str, pd.DataFrame]:
-        """Incremental update: fetch only new data since last saved date."""
+        """Incremental update: fetch new data and append to existing processed files."""
         prices_path = os.path.join(self.processed_dir, "prices.parquet")
-        if os.path.exists(prices_path):
-            existing = pd.read_parquet(prices_path)
-            start = existing.index[-1].strftime("%Y-%m-%d")
-            logger.info("Incremental update from %s", start)
-        else:
-            start = self.start_date
+        macro_path  = os.path.join(self.processed_dir, "macro.parquet")
 
-        return self.run(start=start)
+        if os.path.exists(prices_path):
+            existing_prices = pd.read_parquet(prices_path)
+            existing_macro  = pd.read_parquet(macro_path)
+            # Start one day after the last date we have
+            last_date = existing_prices.index[-1]
+            start = (last_date + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+            end   = datetime.today().strftime("%Y-%m-%d")
+
+            if start > end:
+                logger.info("Data already up to date (%s). No fetch needed.", last_date.date())
+                return {"prices": existing_prices, "macro": existing_macro}
+
+            logger.info("Incremental update from %s → %s", start, end)
+
+            yahoo_tickers = _flatten_yahoo_tickers(self.assets)
+            fred_series   = _flatten_fred_series(self.assets)
+
+            new_prices = self.yahoo.fetch(yahoo_tickers, start=start, end=end)
+            new_macro  = self.fred.fetch(fred_series, start=start, end=end)
+
+            if new_prices.empty:
+                logger.info("No new market data yet for %s (market may be closed).", start)
+                return {"prices": existing_prices, "macro": existing_macro}
+
+            # Append and deduplicate (keep latest values for any overlapping dates)
+            prices = pd.concat([existing_prices, new_prices])
+            prices = prices[~prices.index.duplicated(keep="last")].sort_index()
+            macro  = pd.concat([existing_macro, new_macro])
+            macro  = macro[~macro.index.duplicated(keep="last")].sort_index().ffill()
+
+            self._save(prices, prices_path)
+            self._save(macro, macro_path)
+            logger.info("Update complete. Total rows: prices=%d macro=%d", len(prices), len(macro))
+            return {"prices": prices, "macro": macro}
+
+        # No existing data — run full pipeline
+        return self.run()
 
     @staticmethod
     def _align(

@@ -66,10 +66,12 @@ class LGBMDirectionModel:
 
     def __init__(self, params: dict = None):
         self.params = params or LGBM_DIR_PARAMS
-        self.model = LGBMClassifier(**{
+        # Exclude keys we set explicitly to avoid duplicate keyword argument errors
+        filtered = {
             k: v for k, v in self.params.items()
-            if k not in ("objective", "num_class", "metric")
-        }, objective="multiclass", num_class=3, n_jobs=-1, verbose=-1)
+            if k not in ("objective", "num_class", "metric", "n_jobs", "verbose")
+        }
+        self.model = LGBMClassifier(**filtered, objective="multiclass", num_class=3, n_jobs=-1, verbose=-1)
         self.feature_names: list = []
 
     def _encode(self, y: pd.Series) -> np.ndarray:

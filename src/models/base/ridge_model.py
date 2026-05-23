@@ -40,7 +40,7 @@ class RidgeDirectionModel:
     def __init__(self, C: float = 0.1):
         self.C = C
         self.scaler = StandardScaler()
-        self.model = LogisticRegression(C=C, max_iter=1000, multi_class="multinomial", n_jobs=-1)
+        self.model = LogisticRegression(C=C, max_iter=1000, n_jobs=-1)
         self.feature_names: list = []
 
     def _encode(self, y: pd.Series) -> np.ndarray:

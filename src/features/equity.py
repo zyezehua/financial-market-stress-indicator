@@ -53,7 +53,7 @@ def compute_equity_features(prices: pd.DataFrame, macro: pd.DataFrame) -> pd.Dat
     # ── VVIX (vol of vol) ──────────────────────────────────────────────────
     if "^VVIX" in prices.columns:
         vvix = prices["^VVIX"].copy()
-        vvix = vvix.fillna(method="ffill")
+        vvix = vvix.ffill()
         feat["eq_vvix_level"] = vvix
         feat["eq_vvix_pct_rank_252d"] = _rolling_pct_rank(vvix, 252)
 

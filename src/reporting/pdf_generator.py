@@ -74,20 +74,25 @@ def _history_figure(
     csi_history: pd.Series,
     predictions: Dict[int, dict],
     figsize=(8, 3),
+    min_rows: int = 10,
 ) -> bytes:
     """CSI history chart with stress zone bands and prediction markers."""
     fig, ax = plt.subplots(figsize=figsize)
     fig.patch.set_facecolor(DARK_BG)
     ax.set_facecolor(CARD_BG)
 
-    tail = csi_history.tail(504)  # ~2 years
+    tail = csi_history.dropna().tail(504)  # ~2 years
+    if len(tail) < min_rows:
+        plt.close(fig)
+        return b""
+
     ax.fill_between(tail.index, 0, 25,  alpha=0.12, color="#2ECC71")
     ax.fill_between(tail.index, 25, 50, alpha=0.12, color="#F39C12")
     ax.fill_between(tail.index, 50, 75, alpha=0.12, color="#E67E22")
     ax.fill_between(tail.index, 75, 100, alpha=0.12, color="#E74C3C")
 
     ax.plot(tail.index, tail.values, color="#4fc3f7", lw=1.5, label="CSI")
-    ax.axhline(tail.values[-1], color="white", lw=0.5, ls="--", alpha=0.4)
+    ax.axhline(float(tail.values[-1]), color="white", lw=0.5, ls="--", alpha=0.4)
 
     # Mark prediction points
     colors_h = {5: "#FFD700", 21: "#FF6B6B", 63: "#98FB98"}
@@ -280,8 +285,11 @@ def generate_pdf(
     # ── CSI history chart ──────────────────────────────────────────────────
     story.append(Paragraph("CSI Historical Trajectory (2-Year)", h2))
     hist_bytes = _history_figure(csi["csi_composite"].dropna(), predictions)
-    hist_img = Image(io.BytesIO(hist_bytes), width=6.5 * inch, height=2.4 * inch)
-    story.append(hist_img)
+    if hist_bytes:
+        hist_img = Image(io.BytesIO(hist_bytes), width=6.5 * inch, height=2.4 * inch)
+        story.append(hist_img)
+    else:
+        story.append(Paragraph("(Insufficient history data for chart)", small))
     story.append(Spacer(1, 8))
 
     # ── SHAP charts ────────────────────────────────────────────────────────
