@@ -1,0 +1,54 @@
+# ── Yahoo Finance tickers ──────────────────────────────────────────────────
+yahoo:
+  equity:
+    sp500:       "^GSPC"
+    sp500_etf:   "SPY"
+    nasdaq_etf:  "QQQ"
+    vix:         "^VIX"
+    vix3m:       "^VIX3M"     # available from ~2011; proxy=VIX before that
+    vvix:        "^VVIX"      # available from ~2012
+    sector_etfs:
+      - "XLF"   # Financials
+      - "XLE"   # Energy
+      - "XLK"   # Technology
+      - "XLU"   # Utilities (defensive)
+
+  fixed_income:
+    treasury_long:  "TLT"     # 20+ year
+    high_yield:     "HYG"
+    inv_grade:      "LQD"
+    agg_bond:       "AGG"
+
+  fx:
+    usd_index_etf:  "UUP"     # USD Bullish Fund (proxy for DXY)
+    usdjpy:         "USDJPY=X"
+    eurusd:         "EURUSD=X"
+    gbpusd:         "GBPUSD=X"
+
+  commodities:
+    gold:           "GLD"
+    oil_etf:        "USO"
+    oil_vix:        "^OVX"    # CBOE Crude Oil Volatility
+
+  international:
+    em_etf:         "EEM"     # MSCI Emerging Markets
+    europe_etf:     "VGK"     # FTSE Europe
+    japan_etf:      "EWJ"     # MSCI Japan
+
+# ── FRED series ────────────────────────────────────────────────────────────
+fred:
+  rates:
+    t2y:     "DGS2"           # 2-Year Treasury Yield (daily)
+    t10y:    "DGS10"          # 10-Year Treasury Yield (daily)
+    t3mo:    "DGS3MO"         # 3-Month Treasury Yield (daily)
+    t10y2y:  "T10Y2Y"         # 10Y minus 2Y spread (daily)
+
+  credit:
+    hy_oas:  "BAMLH0A0HYM2"  # HY Option-Adjusted Spread (daily)
+    ig_oas:  "BAMLC0A0CM"    # IG Option-Adjusted Spread (daily)
+
+  liquidity:
+    sofr:    "SOFR"           # Secured Overnight Financing Rate (daily)
+
+  benchmark:
+    fsi:     "STLFSI4"        # St. Louis Fed Financial Stress Index (weekly)
