@@ -63,7 +63,15 @@ class RidgeStressClassModel:
 
     def predict_proba(self, X: pd.DataFrame) -> np.ndarray:
         X_scaled = self.scaler.transform(X[self.feature_names].fillna(0))
-        return self.model.predict_proba(X_scaled)
+        raw = self.model.predict_proba(X_scaled)
+        n_full = len(STRESS_CLASS_LABELS)  # 4
+        if raw.shape[1] == n_full:
+            return raw
+        # LogisticRegression only trains on classes it saw; expand to full 4 columns.
+        out = np.zeros((len(X), n_full))
+        for col, cls_idx in enumerate(self.model.classes_):
+            out[:, int(cls_idx)] = raw[:, col]
+        return out
 
 
 class RidgeDirectionModel:
@@ -90,6 +98,18 @@ class RidgeDirectionModel:
         X_scaled = self.scaler.transform(X[self.feature_names].fillna(0))
         encoded = self.model.predict(X_scaled)
         return np.array([self.REVERSE_MAP[e] for e in encoded])
+
+    def predict_proba(self, X: pd.DataFrame) -> np.ndarray:
+        X_scaled = self.scaler.transform(X[self.feature_names].fillna(0))
+        raw = self.model.predict_proba(X_scaled)
+        n_full = len(self.LABEL_MAP)  # 3
+        if raw.shape[1] == n_full:
+            return raw
+        # LogisticRegression only trains on classes it saw; expand to full 3 columns.
+        out = np.zeros((len(X), n_full))
+        for col, cls_idx in enumerate(self.model.classes_):
+            out[:, int(cls_idx)] = raw[:, col]
+        return out
 
     def predict_proba(self, X: pd.DataFrame) -> np.ndarray:
         X_scaled = self.scaler.transform(X[self.feature_names].fillna(0))

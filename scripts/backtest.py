@@ -45,7 +45,7 @@ import matplotlib.pyplot as plt
 from sklearn.metrics import classification_report
 
 from src.data.pipeline import DataPipeline
-from src.features.builder import build_features, load_features
+from src.features.builder import build_features, load_features, add_regime_features
 from src.labels.composite_index import build_csi, load_csi, build_prediction_targets, load_targets
 from src.labels.calibrator import STRESS_EPISODES
 from src.models.predictor import predict_historical
@@ -338,6 +338,11 @@ def main():
         data     = pipeline.run()
         features = build_features(data["prices"], data["macro"])
         csi      = build_csi(features)
+
+    # Add regime features if not already present (idempotent)
+    if "regime_csi_mean_504d" not in features.columns:
+        logger.info("Adding regime features from CSI ...")
+        features = add_regime_features(features, csi, save=True)
 
     horizons = [args.horizon] if args.horizon else [5, 21, 63]
 

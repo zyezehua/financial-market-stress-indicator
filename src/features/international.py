@@ -82,5 +82,15 @@ def compute_international_features(prices: pd.DataFrame, macro: pd.DataFrame) ->
         feat["intl_gld_ret_5d"] = gld_ret.rolling(5).sum()
         feat["intl_gld_ret_21d"] = gld_ret.rolling(21).sum()
         feat["intl_gld_pct_rank_252d"] = _rolling_pct_rank(gld, 252)
+        feat["intl_gld_rvol_21d"] = _realized_vol(gld_ret, 21)
+
+        # GLD / SPY ratio — flight-to-safety intensity
+        # Rising GLD/SPY = money leaving equities for gold = systemic risk-off.
+        # Peaks at Extreme stress (GFC, COVID); complements SPY/TLT correlation.
+        if "SPY" in prices.columns:
+            gld_spy = gld / prices["SPY"]
+            feat["intl_gld_spy_ratio_pct_rank_252d"] = _rolling_pct_rank(gld_spy, 252)
+            feat["intl_gld_spy_ret_21d"] = gld_spy.pct_change(21)
+            feat["intl_gld_spy_ret_63d"] = gld_spy.pct_change(63)
 
     return feat.ffill().bfill()

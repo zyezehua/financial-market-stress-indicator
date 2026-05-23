@@ -19,17 +19,20 @@ logger = logging.getLogger(__name__)
 DIRECTION_LABELS = {-1: "Down", 0: "Neutral", 1: "Up"}
 
 STRESS_CLASSES = {
-    (0,  25): "Low",
-    (26, 50): "Elevated",
-    (51, 75): "High",
-    (76, 100): "Extreme",
+    (0,  30): "Low",
+    (31, 50): "Elevated",
+    (51, 70): "High",
+    (71, 100): "Extreme",
 }
 
 
-def _classify(score: float) -> str:
-    for (lo, hi), label in STRESS_CLASSES.items():
-        if lo <= score <= hi:
-            return label
+def _classify(score: float, thresholds: dict = None) -> str:
+    q30 = thresholds["q30"] if thresholds else 30
+    q50 = thresholds["q50"] if thresholds else 50
+    q70 = thresholds["q70"] if thresholds else 70
+    if score <= q30:  return "Low"
+    if score <= q50:  return "Elevated"
+    if score <= q70:  return "High"
     return "Extreme"
 
 
@@ -87,8 +90,9 @@ def predict_latest(
         if stress_class_ens is not None:
             stress_class = str(stress_class_ens.predict(X_aligned)[0])
         else:
-            stress_class = _classify(stress_pred)
+            stress_class = _classify(stress_pred, thresholds)
 
+        thresholds = artifact.get("class_thresholds")
         stress_delta = stress_pred - current_csi if not np.isnan(current_csi) else np.nan
 
         dir_result = {}

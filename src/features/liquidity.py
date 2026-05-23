@@ -34,7 +34,7 @@ def compute_liquidity_features(prices: pd.DataFrame, macro: pd.DataFrame) -> pd.
     Inputs
     ------
     prices : DataFrame with SPY, TLT, HYG, GLD, EEM (for cross-asset correlations)
-    macro  : DataFrame with SOFR, DGS3MO (for funding spread)
+    macro  : DataFrame with SOFR, DGS3MO, DFF, USD3MTD156N (funding/interbank spreads)
 
     Returns
     -------
@@ -57,17 +57,36 @@ def compute_liquidity_features(prices: pd.DataFrame, macro: pd.DataFrame) -> pd.
         feat["lq_sofr_level"] = sofr
         feat["lq_sofr_change_5d"] = sofr.diff(5)
 
-    # ── SOFR-OIS spread (SOFR vs Fed Funds rate) ───────────────────────────
-    # Secured vs unsecured overnight spread: pure credit-risk premium signal.
-    # Spikes during interbank stress (GFC repo squeeze, SVB money-market flight).
-    if "SOFR" in macro.columns and "DFF" in macro.columns:
-        sofr_ois = macro["SOFR"] - macro["DFF"]
-        feat["lq_sofr_ois_spread"] = sofr_ois
-        feat["lq_sofr_ois_spread_z_63d"] = (
-            (sofr_ois - sofr_ois.rolling(63).mean())
-            / sofr_ois.rolling(63).std()
+    # ── Unified interbank credit-risk spread ───────────────────────────────
+    # Pre-Apr 2018: TEDRATE = 3M LIBOR − 3M T-bill (weekly, ffilled to daily).
+    #               Peaked at 4.58% during GFC; covers dot-com, 9/11, GFC,
+    #               euro crisis, taper tantrum.
+    # Post-Apr 2018: SOFR − DFF (secured vs unsecured overnight, pure OIS proxy).
+    #               SOFR-DFF takes priority where both overlap (2018–2023).
+    # pct-rank normalization makes the two regimes scale-comparable so the
+    # model sees "how stressed is today vs the past year" regardless of era.
+    ted = (
+        macro["TEDRATE"]
+        if "TEDRATE" in macro.columns
+        else pd.Series(np.nan, index=macro.index)
+    )
+    sofr_dff = (
+        macro["SOFR"] - macro["DFF"]
+        if "SOFR" in macro.columns and "DFF" in macro.columns
+        else pd.Series(np.nan, index=macro.index)
+    )
+    # SOFR-DFF takes priority; TEDRATE fills the pre-2018 gap
+    interbank = sofr_dff.combine_first(ted)
+    if not interbank.isna().all():
+        feat["lq_interbank_spread"] = interbank
+        # pct-rank is the primary normalisation — scale-invariant across eras
+        feat["lq_interbank_spread_pct_rank_252d"] = _rolling_pct_rank(interbank, 252)
+        feat["lq_interbank_spread_pct_rank_63d"]  = _rolling_pct_rank(interbank, 63)
+        # z-score within each rolling window for momentum signal
+        feat["lq_interbank_spread_z_63d"] = (
+            (interbank - interbank.rolling(63).mean())
+            / interbank.rolling(63).std()
         )
-        feat["lq_sofr_ois_spread_pct_rank_252d"] = _rolling_pct_rank(sofr_ois, 252)
 
     # ── Cross-asset average pairwise correlation (contagion) ───────────────
     # High correlation across uncorrelated assets signals systemic stress/flight

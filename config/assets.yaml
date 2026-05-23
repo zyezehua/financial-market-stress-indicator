@@ -9,7 +9,8 @@ yahoo:
     vvix:        "^VVIX"      # available from ~2012
     skew:        "^SKEW"      # CBOE SKEW index (tail risk / OTM put demand)
     sector_etfs:
-      - "XLF"   # Financials
+      - "XLF"   # Financials (broad)
+      - "KBE"   # SPDR S&P Bank ETF (pure banking)
       - "XLE"   # Energy
       - "XLK"   # Technology
       - "XLU"   # Utilities (defensive)
@@ -54,8 +55,9 @@ fred:
     aaa_oas: "BAMLC0A1CAAA"  # AAA corporate OAS (daily)
 
   liquidity:
-    sofr:    "SOFR"           # Secured Overnight Financing Rate (daily)
+    sofr:    "SOFR"           # Secured Overnight Financing Rate (daily, from Apr 2018)
     dff:     "DFF"            # Effective Federal Funds Rate (overnight unsecured — OIS proxy)
+    tedrate: "TEDRATE"        # TED spread = 3M LIBOR − 3M T-bill (weekly, 1986–2023)
 
   benchmark:
     fsi:     "STLFSI4"        # St. Louis Fed Financial Stress Index (weekly)

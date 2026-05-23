@@ -69,12 +69,20 @@ def train_horizon(
             f"(minimum {MIN_TRAIN_SAMPLES} required)."
         )
 
-    # Derive stress class labels from forward stress score
+    # Derive stress class labels using training-data quantiles (regime-adaptive)
+    cls_q30, cls_q50, cls_q70 = [
+        float(np.nanpercentile(y_s.values, p)) for p in [30, 50, 70]
+    ]
+    logger.info(
+        "Class thresholds (h=%dd): Low≤%.1f  Elevated≤%.1f  High≤%.1f  Extreme>%.1f",
+        horizon, cls_q30, cls_q50, cls_q70, cls_q70,
+    )
+
     def _to_class(v):
         if pd.isna(v): return np.nan
-        if v <= 25:  return "Low"
-        if v <= 50:  return "Elevated"
-        if v <= 75:  return "High"
+        if v <= cls_q30: return "Low"
+        if v <= cls_q50: return "Elevated"
+        if v <= cls_q70: return "High"
         return "Extreme"
 
     y_stress_class = y_stress.apply(_to_class).dropna()
@@ -154,6 +162,7 @@ def train_horizon(
         "feature_names":        list(X_s.columns),
         "stress_metrics":       {"cv_mae": avg_mae},
         "direction_metrics":    dir_metrics,
+        "class_thresholds":     {"q30": cls_q30, "q50": cls_q50, "q70": cls_q70},
     }
     path = os.path.join(artifacts_dir, f"model_h{horizon}d.pkl")
     with open(path, "wb") as f:

@@ -90,4 +90,26 @@ def compute_credit_features(prices: pd.DataFrame, macro: pd.DataFrame) -> pd.Dat
         lqd_agg_rel = prices["LQD"] / prices["AGG"]
         feat["cr_lqd_agg_rel_mom_21d"] = lqd_agg_rel.pct_change(21)
 
+    # ── HYG / TLT ratio — credit stress decoupled from duration ──────────
+    # When HYG falls while TLT rallies (ratio drops sharply), it signals pure
+    # credit tightening + flight to safety simultaneously — a hallmark of
+    # Extreme stress (GFC 2008, COVID 2020). Distinct from HYG/SPY which
+    # captures credit-equity divergence only.
+    if "HYG" in prices.columns and "TLT" in prices.columns:
+        hyg_tlt = prices["HYG"] / prices["TLT"]
+        hyg_tlt_ret = hyg_tlt.pct_change()
+        feat["cr_hyg_tlt_ratio"] = hyg_tlt
+        feat["cr_hyg_tlt_ratio_pct_rank_252d"] = _rolling_pct_rank(hyg_tlt, 252)
+        feat["cr_hyg_tlt_ret_5d"]  = hyg_tlt_ret.rolling(5).sum()
+        feat["cr_hyg_tlt_ret_21d"] = hyg_tlt_ret.rolling(21).sum()
+        feat["cr_hyg_tlt_drawdown_63d"] = (
+            hyg_tlt / hyg_tlt.rolling(63).max() - 1
+        ).clip(upper=0).abs()
+
+    # ── HYG 252d drawdown (longer-horizon credit deterioration) ──────────
+    if "HYG" in prices.columns:
+        feat["cr_hyg_drawdown_252d"] = (
+            prices["HYG"] / prices["HYG"].rolling(252).max() - 1
+        ).clip(upper=0).abs()
+
     return feat.ffill().bfill()

@@ -40,7 +40,7 @@ MIN_TRAIN = 756   # trading days
 DEFAULT_STEP = 63  # retraining frequency
 
 
-_SMOTE_MIN_CLASS = 5   # skip SMOTE when any class has fewer than this many samples
+_SMOTE_MIN_CLASS = 3   # skip SMOTE when any class has fewer than this many samples
 
 
 def _smote_safe(
@@ -67,11 +67,24 @@ def _smote_safe(
 
 
 def _classify(score: float) -> str:
-    if score <= 25:
+    if score <= 30:
         return "Low"
     if score <= 50:
         return "Elevated"
-    if score <= 75:
+    if score <= 70:
+        return "High"
+    return "Extreme"
+
+
+def _classify_dynamic(score: float, q30: float, q50: float, q70: float) -> str:
+    """Regime-adaptive classification using training-window quantiles."""
+    if pd.isna(score):
+        return None
+    if score <= q30:
+        return "Low"
+    if score <= q50:
+        return "Elevated"
+    if score <= q70:
         return "High"
     return "Extreme"
 
@@ -162,9 +175,23 @@ def run_walk_forward(
         ridge_s = RidgeStressModel().fit(X_train, y_train)
         ens_s   = StressEnsemble(lgbm_s, xgb_s, ridge_s, ensemble_weights)
 
+        # Dynamic class boundaries from training distribution (regime-adaptive)
+        q30, q50, q70 = [float(np.nanpercentile(y_train.values, p)) for p in [30, 50, 70]]
+
         # Stress-class ensemble — SMOTE-augmented to recover Low/Extreme recall
-        y_train_cls = y_train.apply(_classify)
-        X_cls_sm, y_cls_sm = _smote_safe(X_train, y_train_cls)
+        y_train_cls = y_train.apply(lambda v: _classify_dynamic(v, q30, q50, q70))
+        # Ensure all 4 classes are present so XGB/LGBM classifiers don't fail on
+        # early expanding windows where Low or Extreme haven't appeared yet.
+        _ALL_STRESS = ["Low", "Elevated", "High", "Extreme"]
+        _missing_cls = [c for c in _ALL_STRESS if c not in y_train_cls.values]
+        if _missing_cls:
+            _pad_X = pd.concat([X_train.iloc[[0]]] * len(_missing_cls), ignore_index=True)
+            _pad_y = pd.Series(_missing_cls)
+            _X_cls_in = pd.concat([X_train, _pad_X], ignore_index=True)
+            _y_cls_in = pd.concat([y_train_cls.reset_index(drop=True), _pad_y], ignore_index=True)
+        else:
+            _X_cls_in, _y_cls_in = X_train, y_train_cls
+        X_cls_sm, y_cls_sm = _smote_safe(_X_cls_in, _y_cls_in)
         try:
             lgbm_sc  = LGBMStressClassModel().fit(X_cls_sm, y_cls_sm)
             xgb_sc   = XGBStressClassModel().fit(X_cls_sm, y_cls_sm)
@@ -184,7 +211,7 @@ def run_walk_forward(
                 "stress_score_pred":  round(float(pred), 2),
                 "stress_class_pred":  str(cls_pred),
                 "stress_actual":      float(actual) if not np.isnan(actual) else np.nan,
-                "stress_class_actual": _classify(actual) if not np.isnan(actual) else None,
+                "stress_class_actual": _classify_dynamic(actual, q30, q50, q70) if not np.isnan(actual) else None,
             })
 
         # ── Train direction ensemble ────────────────────────────────────────
@@ -199,6 +226,14 @@ def run_walk_forward(
             y_d_test   = y_dir_all[mask_test]
 
             if len(X_d_train) >= min_train // 2 and len(X_d_test) > 0:
+                # Ensure all 3 direction classes present before fitting
+                _ALL_DIR = [-1, 0, 1]
+                _missing_dir = [c for c in _ALL_DIR if c not in y_d_train.values]
+                if _missing_dir:
+                    _pad_dX = pd.concat([X_d_train.iloc[[0]]] * len(_missing_dir), ignore_index=True)
+                    _pad_dy = pd.Series(_missing_dir)
+                    X_d_train = pd.concat([X_d_train.reset_index(drop=True), _pad_dX], ignore_index=True)
+                    y_d_train = pd.concat([y_d_train.reset_index(drop=True), _pad_dy], ignore_index=True)
                 # SMOTE-augment direction data to improve Down recall
                 X_d_sm, y_d_sm = _smote_safe(X_d_train, y_d_train)
 
@@ -218,11 +253,18 @@ def run_walk_forward(
                     ens_d = dir_ens
 
                 preds_d = ens_d.predict(X_d_test)
-                for date, pred, actual in zip(X_d_test.index, preds_d, y_d_test.values):
+                if hasattr(ens_d, "predict_down_proba"):
+                    down_probas = ens_d.predict_down_proba(X_d_test)
+                else:
+                    down_probas = ens_d.predict_proba(X_d_test)[:, 0]
+                for date, pred, actual, dp in zip(
+                    X_d_test.index, preds_d, y_d_test.values, down_probas
+                ):
                     direction_records.append({
-                        "date":           date,
-                        "direction_pred":  _direction_label(pred),
+                        "date":             date,
+                        "direction_pred":   _direction_label(pred),
                         "direction_actual": _direction_label(actual),
+                        "down_proba":       round(float(dp), 4),
                     })
 
         n_folds += 1

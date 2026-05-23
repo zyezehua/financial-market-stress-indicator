@@ -41,7 +41,9 @@ def compute_equity_features(prices: pd.DataFrame, macro: pd.DataFrame) -> pd.Dat
         feat["eq_vix_mom_21d"] = vix.pct_change(21)
 
     # ── VIX term structure (VIX / VIX3M) ──────────────────────────────────
-    # Ratio > 1 (backwardation) signals acute short-term stress
+    # Ratio > 1 (backwardation) signals acute short-term stress.
+    # Slope < 0 (VIX3M - VIX) = inverted — same signal but linear, so less
+    # compressed at high-VIX extremes where ratio saturates near 1.
     if "^VIX" in prices.columns and "^VIX3M" in prices.columns:
         vix3m = prices["^VIX3M"].copy()
         # Before VIX3M data exists (~2011), proxy with VIX * 1.05 (typical spread)
@@ -49,6 +51,15 @@ def compute_equity_features(prices: pd.DataFrame, macro: pd.DataFrame) -> pd.Dat
         ts_ratio = prices["^VIX"] / vix3m
         feat["eq_vix_term_ratio"] = ts_ratio
         feat["eq_vix_term_ratio_pct_rank_252d"] = _rolling_pct_rank(ts_ratio, 252)
+        feat["eq_vix_term_ratio_z_21d"] = (
+            (ts_ratio - ts_ratio.rolling(21).mean()) / ts_ratio.rolling(21).std()
+        )
+        ts_slope = vix3m - prices["^VIX"]   # positive = normal; negative = inverted
+        feat["eq_vix_term_slope"] = ts_slope
+        feat["eq_vix_term_slope_pct_rank_252d"] = _rolling_pct_rank(ts_slope, 252)
+        feat["eq_vix_term_slope_z_21d"] = (
+            (ts_slope - ts_slope.rolling(21).mean()) / ts_slope.rolling(21).std()
+        )
 
     # ── VVIX (vol of vol) ──────────────────────────────────────────────────
     if "^VVIX" in prices.columns:
@@ -114,5 +125,24 @@ def compute_equity_features(prices: pd.DataFrame, macro: pd.DataFrame) -> pd.Dat
             ovx_vix_ratio = ovx / prices["^VIX"].replace(0, np.nan)
             feat["eq_ovx_vix_ratio"] = ovx_vix_ratio
             feat["eq_ovx_vix_ratio_pct_rank_252d"] = _rolling_pct_rank(ovx_vix_ratio, 252)
+
+    # ── XLF / KBE bank sector stress ─────────────────────────────────────
+    # Bank underperformance leads broad financial stress (GFC, SVB)
+    for ticker, prefix in [("XLF", "eq_xlf"), ("KBE", "eq_kbe")]:
+        if ticker in prices.columns:
+            ret = prices[ticker].pct_change()
+            feat[f"{prefix}_rvol_21d"] = _realized_vol(ret, 21)
+            feat[f"{prefix}_rvol_21d_pct_rank_252d"] = _rolling_pct_rank(
+                feat[f"{prefix}_rvol_21d"], 252
+            )
+            feat[f"{prefix}_ret_5d"]  = ret.rolling(5).sum()
+            feat[f"{prefix}_ret_21d"] = ret.rolling(21).sum()
+            feat[f"{prefix}_drawdown_63d"] = (
+                prices[ticker] / prices[ticker].rolling(63).max() - 1
+            ).clip(upper=0).abs()
+            if "SPY" in prices.columns:
+                rel = prices[ticker] / prices["SPY"]
+                feat[f"{prefix}_spy_rel_mom_21d"] = rel.pct_change(21)
+                feat[f"{prefix}_spy_rel_pct_rank_252d"] = _rolling_pct_rank(rel, 252)
 
     return feat.ffill().bfill()

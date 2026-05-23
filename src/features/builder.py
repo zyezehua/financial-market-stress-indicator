@@ -96,3 +96,39 @@ def load_features(processed_dir: str = "data/processed") -> pd.DataFrame:
     if not os.path.exists(path):
         raise FileNotFoundError(f"Feature matrix not found at {path}. Run build_features first.")
     return pd.read_parquet(path)
+
+
+def add_regime_features(
+    features: pd.DataFrame,
+    csi: pd.DataFrame,
+    save: bool = True,
+    processed_dir: str = "data/processed",
+) -> pd.DataFrame:
+    """
+    Append rolling-CSI regime context features to the feature matrix.
+
+    These features tell the model which baseline regime it is in, so it can
+    distinguish "calm in a high-baseline era" (post-2020) from "calm in a
+    low-baseline era" (2013-2019).  Must be called after both features and
+    CSI are available.
+    """
+    csi_s = csi["csi_composite"]
+    features = features.copy()
+
+    features["regime_csi_mean_252d"] = csi_s.rolling(252, min_periods=126).mean()
+    features["regime_csi_mean_504d"] = csi_s.rolling(504, min_periods=252).mean()
+    features["regime_csi_z_252d"] = (
+        (csi_s - csi_s.rolling(252).mean()) / csi_s.rolling(252).std()
+    )
+    features["regime_csi_pct_rank_504d"] = csi_s.rolling(504, min_periods=252).apply(
+        lambda x: float(pd.Series(x).rank(pct=True).iloc[-1]) * 100, raw=False
+    )
+
+    features = features.reindex(features.index).ffill().bfill()
+
+    if save:
+        path = os.path.join(processed_dir, "features.parquet")
+        features.to_parquet(path)
+        logger.info("Saved feature matrix with regime features: %d cols", features.shape[1])
+
+    return features

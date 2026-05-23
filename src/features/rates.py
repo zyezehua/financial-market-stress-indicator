@@ -39,6 +39,15 @@ def compute_rates_features(prices: pd.DataFrame, macro: pd.DataFrame) -> pd.Data
         feat["rt_t10y_abs_change_5d_pct_rank_252d"] = _rolling_pct_rank(
             feat["rt_t10y_abs_change_5d"], 252
         )
+        # Realized rate volatility — rolling std of daily yield changes (bps).
+        # Direct MOVE-index analogue derived from rate history; captures taper
+        # tantrum (2013), 2022 bear market, 2024 repricing without needing
+        # swaption data. Distinct from TLT price vol (no duration/convexity noise).
+        t10_daily_chg = t10.diff() * 100          # pct → bps
+        rt_rvol_21 = t10_daily_chg.rolling(21).std()
+        feat["rt_t10y_rvol_21d_bp"] = rt_rvol_21
+        feat["rt_t10y_rvol_21d_bp_pct_rank_252d"] = _rolling_pct_rank(rt_rvol_21, 252)
+        feat["rt_t10y_rvol_63d_bp"] = t10_daily_chg.rolling(63).std()
 
     # ── 2-Year yield level ────────────────────────────────────────────────
     if "DGS2" in macro.columns:
