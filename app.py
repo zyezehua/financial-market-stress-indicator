@@ -86,47 +86,57 @@ DARK = dict(
 # ── Artifact loading ─────────────────────────────────────────────────────────
 
 def _get_artifact_dir() -> str:
-    """Return local artifact dir. Downloads from HF Hub if not present locally."""
+    """Return local artifact dir. Downloads pkl files from HF Hub if not present."""
     local = Path("models")
     if (local / "model_h5d.pkl").exists():
         return str(local)
 
     try:
-        from huggingface_hub import snapshot_download
+        import shutil
+        from huggingface_hub import hf_hub_download
         hf_token = st.secrets.get("HF_TOKEN", None) or os.getenv("HF_TOKEN")
-        with st.spinner("Downloading model artifacts from Hugging Face Hub..."):
-            path = snapshot_download(
-                repo_id=HF_REPO,
-                repo_type="dataset",
-                token=hf_token,
-                local_dir="models",
-                ignore_patterns=["*.md", ".gitattributes"],
-            )
-        logger.info("Artifacts downloaded to: %s", path)
-        return path
+        local.mkdir(parents=True, exist_ok=True)
+        with st.spinner("Downloading model artifacts from Hugging Face Hub (~65 MB)..."):
+            for fname in ["model_h5d.pkl", "model_h21d.pkl", "model_h63d.pkl"]:
+                cached = hf_hub_download(
+                    repo_id=HF_REPO, repo_type="dataset",
+                    filename=fname, token=hf_token,
+                )
+                shutil.copy2(cached, local / fname)
+        logger.info("Model artifacts downloaded to: %s", local)
+        return str(local)
     except Exception as exc:
         st.error(f"Could not load model artifacts: {exc}")
         st.stop()
 
 
 def _get_data_dir() -> str:
-    """Return local processed data dir. Downloads from HF Hub if not present."""
-    local = Path("data/processed")
-    if (local / "features.parquet").exists():
-        return str(local)
+    """Download data files from HF Hub to their expected local paths."""
+    import shutil
+    from huggingface_hub import hf_hub_download
+
+    # HF path → expected local path (matching load_features / load_csi conventions)
+    mapping = [
+        ("data/features.parquet", Path("data/processed/features.parquet")),
+        ("data/csi.parquet",      Path("data/labels/csi.parquet")),
+        ("data/targets.parquet",  Path("data/labels/targets.parquet")),
+    ]
+
+    if mapping[0][1].exists():
+        return str(mapping[0][1].parent)
 
     try:
-        from huggingface_hub import hf_hub_download
         hf_token = st.secrets.get("HF_TOKEN", None) or os.getenv("HF_TOKEN")
-        local.mkdir(parents=True, exist_ok=True)
-        for fname in ["features.parquet", "csi.parquet", "targets.parquet"]:
-            hf_hub_download(
-                repo_id=HF_REPO, repo_type="dataset",
-                filename=f"data/{fname}",
-                local_dir=".",
-                token=hf_token,
-            )
-        return str(local)
+        with st.spinner("Downloading data from Hugging Face Hub (~7 MB)..."):
+            for hf_fname, local_path in mapping:
+                local_path.parent.mkdir(parents=True, exist_ok=True)
+                cached = hf_hub_download(
+                    repo_id=HF_REPO, repo_type="dataset",
+                    filename=hf_fname, token=hf_token,
+                )
+                shutil.copy2(cached, local_path)
+        logger.info("Data downloaded to data/processed/ and data/labels/")
+        return str(mapping[0][1].parent)
     except Exception as exc:
         st.error(f"Could not load data artifacts: {exc}")
         st.stop()
