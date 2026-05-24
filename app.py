@@ -754,10 +754,10 @@ def _run_strategy_backtest(
     csi_sig = csi_sig.loc[common]
 
     dir_sig = None
+    dir_sig_cutoff = None
     if has_model and "S3" in strategies:
         try:
             from src.models.trainer import load_artifact
-            from src.features.builder import add_regime_features
             features, csi_full = load_data()
             artifact = load_artifact(5, "models")
             X = features.reindex(columns=artifact["feature_names"], fill_value=0)
@@ -766,11 +766,21 @@ def _run_strategy_backtest(
                 raw = dir_ens.predict(X)
                 prob = dir_ens.predict_proba(X)
                 lmap = {-1: "Down", 0: "Neutral", 1: "Up"}
-                dir_sig = pd.DataFrame({
+                full_sig = pd.DataFrame({
                     "dir_pred":      [lmap.get(int(p), "Neutral") for p in raw],
                     "dir_down_prob": prob[:, 0],
                     "dir_up_prob":   prob[:, 2],
                 }, index=X.index)
+                # Restrict to post-training dates only to prevent in-sample lookahead.
+                # The model was trained on all data up to train_data_end, so predictions
+                # on those dates are in-sample and would inflate S3 performance.
+                train_end = artifact.get("train_data_end")
+                if train_end:
+                    cutoff = pd.Timestamp(train_end)
+                    dir_sig_cutoff = cutoff
+                    dir_sig = full_sig[full_sig.index > cutoff]
+                else:
+                    dir_sig = full_sig
         except Exception:
             pass
 
@@ -780,12 +790,13 @@ def _run_strategy_backtest(
         dir_sig=dir_sig,
     )
     return {
-        "results": output["results"],
-        "metrics": output["metrics"],
-        "opt_params": output["opt_params"],
-        "opt_folds": output["opt_folds"],
-        "csi_sig": csi_sig,
-        "spy": spy,
+        "results":         output["results"],
+        "metrics":         output["metrics"],
+        "opt_params":      output["opt_params"],
+        "opt_folds":       output["opt_folds"],
+        "csi_sig":         csi_sig,
+        "spy":             spy,
+        "dir_sig_cutoff":  dir_sig_cutoff.isoformat() if dir_sig_cutoff else None,
     }
 
 
@@ -1051,9 +1062,27 @@ def render_strategy_backtest(csi: pd.DataFrame):
         return
 
     # ── Results ─────────────────────────────────────────────────────────────────
-    results  = output["results"]
-    metrics  = output["metrics"]
-    csi_sig  = output["csi_sig"]
+    results         = output["results"]
+    metrics         = output["metrics"]
+    csi_sig         = output["csi_sig"]
+    dir_sig_cutoff  = output.get("dir_sig_cutoff")
+
+    # S3 lookahead warning
+    has_s3 = any("S3" in n for n in results)
+    if has_s3 and dir_sig_cutoff:
+        st.warning(
+            f"**S3 lookahead notice**: The direction model was trained on all data up to "
+            f"**{dir_sig_cutoff[:10]}**. The model direction signal is only applied after "
+            f"that date — prior dates fall back to S1 (no direction overlay). "
+            f"Historical S3 performance before this cutoff is identical to S1.",
+            icon="⚠️",
+        )
+    elif has_s3 and not dir_sig_cutoff:
+        st.error(
+            "**S3 warning**: Could not determine model training cutoff. "
+            "S3 results may reflect in-sample lookahead bias — treat with caution.",
+            icon="🚨",
+        )
 
     # Winner banner
     ranked   = sorted([m for m in metrics if m.get("rank") == 1], key=lambda x: x.get("rank", 99))

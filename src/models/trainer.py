@@ -155,6 +155,7 @@ def train_horizon(
     artifact = {
         "horizon":              horizon,
         "trained_at":           datetime.now().isoformat(),
+        "train_data_end":       X_s.index.max().isoformat(),
         "stress_ensemble":      stress_ens,
         "stress_class_ensemble": stress_class_ens,
         "direction_ensemble":   direction_ens,
