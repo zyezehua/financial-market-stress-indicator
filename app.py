@@ -789,14 +789,23 @@ def _run_strategy_backtest(
     }
 
 
+def _hex_rgba(hex_color: str, alpha: float = 0.18) -> str:
+    h = hex_color.lstrip("#")
+    if len(h) == 3:
+        h = h[0] * 2 + h[1] * 2 + h[2] * 2
+    return f"rgba({int(h[0:2],16)},{int(h[2:4],16)},{int(h[4:6],16)},{alpha})"
+
+
 def _strategy_equity_chart(results: dict) -> go.Figure:
     fig = go.Figure()
-    for name, bt in results.items():
-        color = STRAT_PALETTE.get(name, "#aaa")
+    # Skip (default) versions to keep chart readable; show (opt) or unsuffixed only
+    visible = {n: bt for n, bt in results.items() if not n.endswith("(default)")}
+    for name, bt in visible.items():
+        color = STRAT_PALETTE.get(name, "#aaaaaa")
         is_bh = name == "B&H SPY"
         fig.add_trace(go.Scatter(
             x=bt.index, y=bt["cum_strat"],
-            name=name, line=dict(color=color, width=2.2 if is_bh else 1.6,
+            name=name, line=dict(color=color, width=2.2 if is_bh else 1.8,
                                  dash="dash" if is_bh else "solid"),
             opacity=0.9,
         ))
@@ -814,14 +823,15 @@ def _strategy_equity_chart(results: dict) -> go.Figure:
 
 def _strategy_drawdown_chart(results: dict) -> go.Figure:
     fig = go.Figure()
-    for name, bt in results.items():
-        color = STRAT_PALETTE.get(name, "#aaa")
+    visible = {n: bt for n, bt in results.items() if not n.endswith("(default)")}
+    for name, bt in visible.items():
+        color = STRAT_PALETTE.get(name, "#aaaaaa")
         fig.add_trace(go.Scatter(
             x=bt.index, y=bt["drawdown"] * 100,
             name=name, fill="tozeroy",
             line=dict(color=color, width=1.2),
-            fillcolor=color.replace("#", "#44") + "33" if len(color) == 7 else color,
-            opacity=0.75,
+            fillcolor=_hex_rgba(color, 0.18),
+            opacity=0.9,
         ))
     fig.update_layout(
         **DARK,
@@ -892,8 +902,9 @@ def _metrics_bar_chart(metrics: list, keys: list[str]) -> go.Figure:
 
 def _subperiod_chart(sub_df: pd.DataFrame) -> go.Figure:
     fig = go.Figure()
-    for col in sub_df.columns:
-        color = STRAT_PALETTE.get(col, "#aaa")
+    visible_cols = [c for c in sub_df.columns if not c.endswith("(default)")]
+    for col in visible_cols:
+        color = STRAT_PALETTE.get(col, "#aaaaaa")
         is_bh = col == "B&H SPY"
         fig.add_trace(go.Bar(
             name=col,
