@@ -1008,10 +1008,18 @@ def render_strategy_backtest(csi: pd.DataFrame):
             selected_labels = st.multiselect(
                 "Select strategies to compare",
                 list(STRATEGY_OPTIONS.keys()),
-                default=list(STRATEGY_OPTIONS.keys()),
+                default=[k for k in STRATEGY_OPTIONS if "S3" not in k],
                 key="strategies",
             )
             selected_sids = [STRATEGY_OPTIONS[l] for l in selected_labels]
+            if any("S3" in s for s in selected_sids):
+                st.warning(
+                    "**S3 is not suitable for historical backtesting.** "
+                    "The direction model is trained on all available data, so predictions "
+                    "on historical dates are in-sample and will inflate performance. "
+                    "S3 is only meaningful as a live/forward-looking signal.",
+                    icon="⚠️",
+                )
             for sid in selected_sids:
                 meta = STRATEGY_META.get(sid, {})
                 st.caption(f"• **{meta.get('label', sid)}**: {meta.get('desc', '')}")
