@@ -738,7 +738,7 @@ def _run_strategy_backtest(
     from src.strategy.engine import run_all_strategies
 
     spy = _download_spy(start, end)
-    csi, _ = load_data()
+    _, csi = load_data()
 
     csi_sig = csi[["csi_composite"]].copy()
     if "csi_class" in csi.columns:
