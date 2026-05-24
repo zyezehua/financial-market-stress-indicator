@@ -998,7 +998,9 @@ def render_strategy_backtest(csi: pd.DataFrame):
             st.error("Start date must be before end date.")
             return
 
-        # Check if model artifacts are available for S3
+        # Ensure model artifacts are downloaded if S3 selected
+        if "S3" in selected_sids:
+            _get_artifact_dir()
         has_model = "S3" in selected_sids and Path("models/model_h5d.pkl").exists()
 
         prog_bar = st.progress(0, text="Initializing…")
