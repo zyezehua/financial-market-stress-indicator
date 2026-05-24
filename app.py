@@ -820,7 +820,7 @@ def _strategy_equity_chart(results: dict) -> go.Figure:
             yanchor="top", y=-0.18,
             font=dict(size=11),
         ),
-        margin=dict(b=120, t=50),
+        margin_b=130, margin_t=50,
         height=420,
     )
     return fig
@@ -849,7 +849,7 @@ def _strategy_drawdown_chart(results: dict) -> go.Figure:
             yanchor="top", y=-0.28,
             font=dict(size=11),
         ),
-        margin=dict(b=100, t=50),
+        margin_b=110, margin_t=50,
         height=300,
     )
     return fig
@@ -909,7 +909,7 @@ def _metrics_bar_chart(metrics: list, keys: list[str]) -> go.Figure:
             yanchor="top", y=-0.22,
             font=dict(size=11),
         ),
-        margin=dict(b=100, t=50),
+        margin_b=110, margin_t=50,
         showlegend=True,
     )
     return fig
@@ -947,7 +947,7 @@ def _subperiod_chart(sub_df: pd.DataFrame) -> go.Figure:
             yanchor="top", y=-0.22,
             font=dict(size=11),
         ),
-        margin=dict(b=120, t=50),
+        margin_b=130, margin_t=50,
         xaxis_tickangle=-25,
     )
     return fig
@@ -997,7 +997,7 @@ def render_strategy_backtest(csi: pd.DataFrame):
             selected_labels = st.multiselect(
                 "Select strategies to compare",
                 list(STRATEGY_OPTIONS.keys()),
-                default=[k for k in STRATEGY_OPTIONS if "S3" not in k],
+                default=list(STRATEGY_OPTIONS.keys()),
                 key="strategies",
             )
             selected_sids = [STRATEGY_OPTIONS[l] for l in selected_labels]
