@@ -815,8 +815,13 @@ def _strategy_equity_chart(results: dict) -> go.Figure:
         yaxis_title="Portfolio Value (start = $1)",
         yaxis_tickprefix="$",
         hovermode="x unified",
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
-        height=380,
+        legend=dict(
+            orientation="h", xanchor="center", x=0.5,
+            yanchor="top", y=-0.18,
+            font=dict(size=11),
+        ),
+        margin=dict(b=120, t=50),
+        height=420,
     )
     return fig
 
@@ -839,8 +844,13 @@ def _strategy_drawdown_chart(results: dict) -> go.Figure:
         yaxis_title="Drawdown (%)",
         yaxis_autorange="reversed",
         hovermode="x unified",
-        height=260,
-        legend=dict(orientation="h", yanchor="bottom", y=1.02),
+        legend=dict(
+            orientation="h", xanchor="center", x=0.5,
+            yanchor="top", y=-0.28,
+            font=dict(size=11),
+        ),
+        margin=dict(b=100, t=50),
+        height=300,
     )
     return fig
 
@@ -893,8 +903,13 @@ def _metrics_bar_chart(metrics: list, keys: list[str]) -> go.Figure:
         **DARK,
         barmode="group",
         title="Strategy vs Benchmark — Key Metrics",
-        height=350,
-        legend=dict(orientation="h", yanchor="bottom", y=1.02),
+        height=370,
+        legend=dict(
+            orientation="h", xanchor="center", x=0.5,
+            yanchor="top", y=-0.22,
+            font=dict(size=11),
+        ),
+        margin=dict(b=100, t=50),
         showlegend=True,
     )
     return fig
@@ -926,8 +941,13 @@ def _subperiod_chart(sub_df: pd.DataFrame) -> go.Figure:
         yaxis_title="Return (%)",
         barmode="group",
         hovermode="x unified",
-        height=380,
-        legend=dict(orientation="h", yanchor="bottom", y=1.02),
+        height=420,
+        legend=dict(
+            orientation="h", xanchor="center", x=0.5,
+            yanchor="top", y=-0.22,
+            font=dict(size=11),
+        ),
+        margin=dict(b=120, t=50),
         xaxis_tickangle=-25,
     )
     return fig
