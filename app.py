@@ -664,6 +664,490 @@ def render_calendar(csi: pd.DataFrame):
     st.plotly_chart(_calendar_heatmap(csi), use_container_width=True, key="calendar")
 
 
+# ── Strategy Backtest tab ─────────────────────────────────────────────────────
+
+METRIC_OPTIONS = {
+    "Sharpe Ratio":     "sharpe",
+    "CAGR":             "cagr",
+    "Calmar Ratio":     "calmar",
+    "Sortino Ratio":    "sortino",
+    "Max Drawdown":     "max_drawdown",
+    "Volatility":       "vol",
+}
+
+STRATEGY_OPTIONS = {
+    "S1 — Stress Allocation":       "S1",
+    "S2 — Trend Filter":            "S2",
+    "S3 — Stress + Direction":      "S3",
+    "S4 — Percentile Adaptive":     "S4",
+    "S5 — Trend + Re-entry":        "S5",
+}
+
+STRAT_PALETTE = {
+    "B&H SPY":                            "#4fc3f7",
+    "S1: Stress Allocation":              "#FFD700",
+    "S1: Stress Allocation (default)":    "#665800",
+    "S1: Stress Allocation (opt)":        "#FFD700",
+    "S2: Trend Filter":                   "#2ECC71",
+    "S2: Trend Filter (default)":         "#0e5228",
+    "S2: Trend Filter (opt)":             "#2ECC71",
+    "S3: Stress + Direction":             "#E67E22",
+    "S3: Stress + Direction (default)":   "#5c3309",
+    "S3: Stress + Direction (opt)":       "#E67E22",
+    "S4: Percentile Adaptive":            "#BB86FC",
+    "S4: Percentile Adaptive (default)":  "#4a2f6e",
+    "S4: Percentile Adaptive (opt)":      "#BB86FC",
+    "S5: Trend + Re-entry":               "#FF6B9D",
+    "S5: Trend + Re-entry (default)":     "#6e1f3c",
+    "S5: Trend + Re-entry (opt)":         "#FF6B9D",
+}
+
+SUBPERIOD_META = {
+    "GFC 2008-09":       {"type": "crash"},
+    "Euro Crisis 2011":  {"type": "crash"},
+    "China / Oil 2015":  {"type": "crash"},
+    "COVID Crash 2020":  {"type": "crash"},
+    "Bear Market 2022":  {"type": "crash"},
+    "SVB / Rates 2023":  {"type": "crash"},
+    "Tariff Shock 2025": {"type": "crash"},
+    "Bull 2013-2014":    {"type": "bull"},
+    "Bull 2017":         {"type": "bull"},
+    "Bull 2019":         {"type": "bull"},
+}
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _download_spy(start: str, end: str) -> pd.Series:
+    from src.strategy.engine import load_spy_returns
+    return load_spy_returns(start, end)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _run_strategy_backtest(
+    start: str,
+    end: str,
+    strategies: tuple,
+    priority: tuple,
+    optimize: bool,
+    has_model: bool,
+) -> dict:
+    """
+    Cached strategy backtest. Re-runs only when parameters change.
+    Returns serialisable dict (DataFrames + metrics list).
+    """
+    from src.strategy.engine import run_all_strategies
+
+    spy = _download_spy(start, end)
+    csi, _ = load_data()
+
+    csi_sig = csi[["csi_composite"]].copy()
+    if "csi_class" in csi.columns:
+        csi_sig["csi_class"] = csi["csi_class"]
+    else:
+        csi_sig["csi_class"] = pd.cut(
+            csi_sig["csi_composite"], bins=[-1, 30, 50, 70, 101],
+            labels=["Low", "Elevated", "High", "Extreme"],
+        )
+
+    common = spy.index.intersection(csi_sig.index)
+    spy    = spy.loc[common]
+    csi_sig = csi_sig.loc[common]
+
+    dir_sig = None
+    if has_model and "S3" in strategies:
+        try:
+            from src.models.trainer import load_artifact
+            from src.features.builder import add_regime_features
+            features, csi_full = load_data()
+            artifact = load_artifact(5, "models")
+            X = features.reindex(columns=artifact["feature_names"], fill_value=0)
+            dir_ens = artifact.get("down_risk_ensemble") or artifact.get("direction_ensemble")
+            if dir_ens is not None:
+                raw = dir_ens.predict(X)
+                prob = dir_ens.predict_proba(X)
+                lmap = {-1: "Down", 0: "Neutral", 1: "Up"}
+                dir_sig = pd.DataFrame({
+                    "dir_pred":      [lmap.get(int(p), "Neutral") for p in raw],
+                    "dir_down_prob": prob[:, 0],
+                    "dir_up_prob":   prob[:, 2],
+                }, index=X.index)
+        except Exception:
+            pass
+
+    output = run_all_strategies(
+        spy, csi_sig, list(strategies), list(priority),
+        optimize=optimize,
+        dir_sig=dir_sig,
+    )
+    return {
+        "results": output["results"],
+        "metrics": output["metrics"],
+        "opt_params": output["opt_params"],
+        "opt_folds": output["opt_folds"],
+        "csi_sig": csi_sig,
+        "spy": spy,
+    }
+
+
+def _strategy_equity_chart(results: dict) -> go.Figure:
+    fig = go.Figure()
+    for name, bt in results.items():
+        color = STRAT_PALETTE.get(name, "#aaa")
+        is_bh = name == "B&H SPY"
+        fig.add_trace(go.Scatter(
+            x=bt.index, y=bt["cum_strat"],
+            name=name, line=dict(color=color, width=2.2 if is_bh else 1.6,
+                                 dash="dash" if is_bh else "solid"),
+            opacity=0.9,
+        ))
+    fig.update_layout(
+        **DARK,
+        title="Equity Curves — Strategy vs Buy & Hold SPY",
+        yaxis_title="Portfolio Value (start = $1)",
+        yaxis_tickprefix="$",
+        hovermode="x unified",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+        height=380,
+    )
+    return fig
+
+
+def _strategy_drawdown_chart(results: dict) -> go.Figure:
+    fig = go.Figure()
+    for name, bt in results.items():
+        color = STRAT_PALETTE.get(name, "#aaa")
+        fig.add_trace(go.Scatter(
+            x=bt.index, y=bt["drawdown"] * 100,
+            name=name, fill="tozeroy",
+            line=dict(color=color, width=1.2),
+            fillcolor=color.replace("#", "#44") + "33" if len(color) == 7 else color,
+            opacity=0.75,
+        ))
+    fig.update_layout(
+        **DARK,
+        title="Drawdown (%)",
+        yaxis_title="Drawdown (%)",
+        yaxis_autorange="reversed",
+        hovermode="x unified",
+        height=260,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02),
+    )
+    return fig
+
+
+def _metrics_bar_chart(metrics: list, keys: list[str]) -> go.Figure:
+    from src.strategy.engine import METRIC_LABELS
+
+    strats = [m for m in metrics if m.get("rank") is not None]
+    bh     = next((m for m in metrics if m["name"] == "B&H SPY"), {})
+
+    fig = go.Figure()
+    for key in keys:
+        label = METRIC_LABELS.get(key, key)
+        y_strats = []
+        names_s  = []
+        colors   = []
+        for m in strats:
+            val = m.get(key, 0)
+            if key == "cagr":
+                val = val * 100
+            elif key in ("total_return", "alpha_cagr"):
+                val = val * 100
+            elif key == "max_drawdown":
+                val = val * 100
+            elif key == "vol":
+                val = val * 100
+            y_strats.append(round(val, 3) if val is not None else 0)
+            names_s.append(m["name"])
+            colors.append(STRAT_PALETTE.get(m["name"], "#aaa"))
+
+        fig.add_trace(go.Bar(
+            name=label, x=names_s, y=y_strats,
+            marker_color=colors,
+            text=[f"{v:.2f}" for v in y_strats],
+            textposition="outside",
+        ))
+
+        # Benchmark line
+        bh_val = bh.get(key, None)
+        if bh_val is not None:
+            if key in ("cagr", "total_return", "alpha_cagr", "max_drawdown", "vol"):
+                bh_val = bh_val * 100 if key == "cagr" else bh_val * 100
+            fig.add_hline(
+                y=float(bh_val or 0), line_dash="dot", line_color="#4fc3f7",
+                annotation_text=f"B&H: {bh_val:.2f}",
+                annotation_position="bottom right",
+            )
+
+    fig.update_layout(
+        **DARK,
+        barmode="group",
+        title="Strategy vs Benchmark — Key Metrics",
+        height=350,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02),
+        showlegend=True,
+    )
+    return fig
+
+
+def _subperiod_chart(sub_df: pd.DataFrame) -> go.Figure:
+    fig = go.Figure()
+    for col in sub_df.columns:
+        color = STRAT_PALETTE.get(col, "#aaa")
+        is_bh = col == "B&H SPY"
+        fig.add_trace(go.Bar(
+            name=col,
+            x=sub_df.index,
+            y=(sub_df[col] * 100).round(1),
+            marker_color=color,
+            opacity=1.0 if not is_bh else 0.7,
+            marker_line_width=2 if is_bh else 0,
+            marker_line_color="#fff" if is_bh else None,
+        ))
+    fig.add_hline(y=0, line_color="#888", line_width=0.8)
+    # Shade crash vs bull periods
+    for period in sub_df.index:
+        meta = SUBPERIOD_META.get(period, {})
+        color = "rgba(231,76,60,0.07)" if meta.get("type") == "crash" else "rgba(46,204,113,0.07)"
+    fig.update_layout(
+        **DARK,
+        title="Sub-period Performance (CAGR / Total Return)",
+        yaxis_title="Return (%)",
+        barmode="group",
+        hovermode="x unified",
+        height=380,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02),
+        xaxis_tickangle=-25,
+    )
+    return fig
+
+
+def render_strategy_backtest(csi: pd.DataFrame):
+    from src.strategy.engine import STRATEGY_META, subperiod_returns, METRIC_LABELS
+
+    st.markdown("### 🎯 Strategy Backtest — Signal-Based S&P 500 Trading")
+    st.caption(
+        "Strategies trade SPY based on FMSI stress signals. "
+        "Signal from t−1 used to trade at open of day t. "
+        "Transaction cost: 0.05% per side. Benchmark: buy-and-hold SPY."
+    )
+
+    # ── Controls ───────────────────────────────────────────────────────────────
+    with st.expander("⚙️ Backtest Settings", expanded=True):
+        col_left, col_mid, col_right = st.columns([2, 2, 2])
+
+        with col_left:
+            st.markdown("**Backtest Period**")
+            min_date = pd.Timestamp("2003-01-01")
+            max_date = csi.index.max().to_pydatetime() if hasattr(csi.index.max(), "to_pydatetime") else csi.index.max()
+            bt_start = st.date_input("Start", value=pd.Timestamp("2003-01-01"),
+                                     min_value=min_date, max_value=max_date, key="bt_start")
+            bt_end   = st.date_input("End",   value=max_date,
+                                     min_value=min_date, max_value=max_date, key="bt_end")
+            optimize = st.toggle("Walk-forward optimize parameters", value=True,
+                                 help="Find best parameters per strategy via 5-year rolling folds (~5–15s)")
+
+        with col_mid:
+            st.markdown("**Optimization Objective (Priority Ranking)**")
+            metric_keys = list(METRIC_OPTIONS.keys())
+            p1 = st.selectbox("1st priority (primary objective)", metric_keys,
+                              index=0, key="p1")
+            remaining2 = [m for m in metric_keys if m != p1]
+            p2 = st.selectbox("2nd priority", remaining2,
+                              index=1, key="p2")
+            remaining3 = [m for m in remaining2 if m != p2]
+            p3 = st.selectbox("3rd priority", remaining3,
+                              index=0, key="p3")
+            priority_labels = [p1, p2, p3]
+            priority = [METRIC_OPTIONS[p] for p in priority_labels]
+
+        with col_right:
+            st.markdown("**Strategies**")
+            selected_labels = st.multiselect(
+                "Select strategies to compare",
+                list(STRATEGY_OPTIONS.keys()),
+                default=[k for k in STRATEGY_OPTIONS if "S3" not in k],
+                key="strategies",
+            )
+            selected_sids = [STRATEGY_OPTIONS[l] for l in selected_labels]
+            for sid in selected_sids:
+                meta = STRATEGY_META.get(sid, {})
+                st.caption(f"• **{meta.get('label', sid)}**: {meta.get('desc', '')}")
+
+        run_btn = st.button("▶ Run Backtest", type="primary", use_container_width=True)
+
+    if "bt_output" not in st.session_state:
+        st.session_state["bt_output"] = None
+
+    if run_btn:
+        if not selected_sids:
+            st.warning("Select at least one strategy.")
+            return
+        if bt_start >= bt_end:
+            st.error("Start date must be before end date.")
+            return
+
+        # Check if model artifacts are available for S3
+        has_model = "S3" in selected_sids and Path("models/model_h5d.pkl").exists()
+
+        prog_bar = st.progress(0, text="Initializing…")
+
+        def update_progress(frac, msg):
+            prog_bar.progress(min(frac, 0.99), text=msg)
+
+        try:
+            with st.spinner("Running backtests…"):
+                _run_strategy_backtest.clear()
+                output = _run_strategy_backtest(
+                    start=str(bt_start),
+                    end=str(bt_end),
+                    strategies=tuple(selected_sids),
+                    priority=tuple(priority),
+                    optimize=optimize,
+                    has_model=has_model,
+                )
+                st.session_state["bt_output"] = output
+            prog_bar.progress(1.0, text="Done!")
+        except Exception as exc:
+            st.error(f"Backtest failed: {exc}")
+            return
+
+    output = st.session_state.get("bt_output")
+    if output is None:
+        st.info("Configure settings above and click **▶ Run Backtest** to see results.")
+        return
+
+    # ── Results ─────────────────────────────────────────────────────────────────
+    results  = output["results"]
+    metrics  = output["metrics"]
+    csi_sig  = output["csi_sig"]
+
+    # Winner banner
+    ranked   = sorted([m for m in metrics if m.get("rank") == 1], key=lambda x: x.get("rank", 99))
+    winner   = ranked[0] if ranked else None
+    bh_m     = next((m for m in metrics if m["name"] == "B&H SPY"), {})
+
+    if winner:
+        beats = []
+        if winner["cagr"]   > bh_m.get("bh_cagr", 0):   beats.append("Return")
+        if winner["sharpe"] > bh_m.get("bh_sharpe", 0):  beats.append("Sharpe")
+        if winner["calmar"] > bh_m.get("bh_calmar", 0):  beats.append("Calmar")
+        beats_str = " · ".join(beats) if beats else "no metric"
+        beat_color = "#2ECC71" if beats else "#E74C3C"
+        st.markdown(
+            f"<div style='background:#16213e;border-left:4px solid {beat_color};"
+            f"padding:10px 16px;border-radius:6px;margin-bottom:12px'>"
+            f"<b style='color:{beat_color}'>🏆 Best Strategy: {winner['name']}</b>"
+            f"<span style='color:#aaa;margin-left:12px'>Composite score: {winner['composite_score']:.2f}</span>"
+            f"<span style='color:#4fc3f7;margin-left:12px'>Beats B&H on: {beats_str}</span>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+
+    # Metrics table
+    st.markdown("#### Performance Metrics")
+    display_keys = ["cagr", "vol", "sharpe", "sortino", "calmar",
+                    "max_drawdown", "total_return", "pct_invested", "alpha_cagr"]
+    display_labels = {
+        "cagr": "CAGR", "vol": "Volatility", "sharpe": "Sharpe",
+        "sortino": "Sortino", "calmar": "Calmar", "max_drawdown": "Max DD",
+        "total_return": "Total Return", "pct_invested": "% Invested",
+        "alpha_cagr": "Alpha (CAGR)",
+    }
+    fmt_map = {
+        "cagr": "{:.2%}", "vol": "{:.2%}", "max_drawdown": "{:.2%}",
+        "total_return": "{:.2%}", "pct_invested": "{:.1%}", "alpha_cagr": "{:+.2%}",
+        "sharpe": "{:.3f}", "sortino": "{:.3f}", "calmar": "{:.3f}",
+    }
+
+    table_rows = []
+    for key in display_keys:
+        row = {"Metric": display_labels[key]}
+        for m in metrics:
+            val = m.get(key)
+            if val is None:
+                row[m["name"]] = "—"
+            else:
+                try:
+                    row[m["name"]] = fmt_map.get(key, "{:.3f}").format(val)
+                except Exception:
+                    row[m["name"]] = str(val)
+        table_rows.append(row)
+
+    table_df = pd.DataFrame(table_rows).set_index("Metric")
+
+    # Highlight winner column
+    def highlight_winner(col):
+        is_w = col.name == winner["name"] if winner else False
+        return ["background-color: #1e3a2f" if is_w else "" for _ in col]
+
+    st.dataframe(
+        table_df.style.apply(highlight_winner, axis=0),
+        use_container_width=True,
+    )
+
+    # Rank row
+    rank_row = {m["name"]: f"#{m['rank']}" if m.get("rank") else "Benchmark" for m in metrics}
+    st.caption(
+        "Rank: " + "  ·  ".join(
+            f"**{name}** {rank}" for name, rank in rank_row.items()
+        )
+    )
+
+    st.divider()
+
+    # Equity curve + Drawdown
+    st.plotly_chart(_strategy_equity_chart(results), use_container_width=True, key="strat_eq")
+    st.plotly_chart(_strategy_drawdown_chart(results), use_container_width=True, key="strat_dd")
+
+    st.divider()
+
+    # Metric bar chart (top 3 priority metrics)
+    st.markdown("#### Risk-Adjusted Metrics Comparison")
+    bar_keys = [k for k in priority[:3] if k != "pct_invested"]
+    if bar_keys:
+        st.plotly_chart(_metrics_bar_chart(metrics, bar_keys), use_container_width=True,
+                        key="strat_bars")
+
+    st.divider()
+
+    # Sub-period analysis
+    st.markdown("#### Sub-period Analysis")
+    st.caption("Red = stress episodes · Green = bull markets. Shows CAGR (periods >6mo) or total return (shorter).")
+    sub_df = subperiod_returns(results)
+    st.plotly_chart(_subperiod_chart(sub_df), use_container_width=True, key="strat_sub")
+
+    # Sub-period table
+    with st.expander("Sub-period Data Table"):
+        fmt_sub = sub_df.map(lambda x: f"{x:.1%}" if pd.notna(x) else "N/A")
+        # Colour cells: green if positive return, red if negative
+        def colour_vs_bh(val):
+            try:
+                v = float(val.strip("%")) / 100
+                return "color: #2ECC71" if v >= 0 else "color: #E74C3C"
+            except Exception:
+                return ""
+        st.dataframe(fmt_sub.style.map(colour_vs_bh), use_container_width=True)
+
+    # Optimal parameters
+    if output.get("opt_params"):
+        with st.expander("🔧 Optimal Parameters Found"):
+            for sid, params in output["opt_params"].items():
+                from src.strategy.engine import STRATEGY_META as SM
+                st.markdown(f"**{SM.get(sid, {}).get('label', sid)}**")
+                st.json(params)
+
+    # Benchmark reference
+    st.divider()
+    st.caption(
+        f"**Benchmark (B&H SPY):** "
+        f"CAGR {bh_m.get('bh_cagr', 0):.2%}  ·  "
+        f"Sharpe {bh_m.get('bh_sharpe', 0):.3f}  ·  "
+        f"Calmar {bh_m.get('bh_calmar', 0):.3f}  ·  "
+        f"Max DD {bh_m.get('bh_max_dd', 0):.2%}"
+    )
+
+
 # ── Main ─────────────────────────────────────────────────────────────────────
 
 def main():
@@ -678,8 +1162,8 @@ def main():
         unsafe_allow_html=True,
     )
 
-    tab_snapshot, tab_history, tab_backtest, tab_calendar = st.tabs(
-        ["📡 Snapshot", "📈 Full History", "📋 Backtest", "📅 Calendar"]
+    tab_snapshot, tab_history, tab_backtest, tab_calendar, tab_strategy = st.tabs(
+        ["📡 Snapshot", "📈 Full History", "📋 Backtest", "📅 Calendar", "💹 Strategy"]
     )
 
     with tab_snapshot:
@@ -699,6 +1183,10 @@ def main():
     with tab_calendar:
         features, csi = load_data()
         render_calendar(csi)
+
+    with tab_strategy:
+        _, csi = load_data()
+        render_strategy_backtest(csi)
 
 
 if __name__ == "__main__":
