@@ -1,0 +1,91 @@
+"""
+One-time script to upload model artifacts and processed data to Hugging Face Hub.
+
+Usage:
+    python scripts/upload_artifacts.py
+
+Requirements:
+    pip install huggingface_hub
+    huggingface-cli login   # or set HF_TOKEN env var
+
+What is uploaded:
+    models/model_h5d.pkl   → HF dataset repo zyezehua/fmsi-artifacts
+    models/model_h21d.pkl
+    models/model_h63d.pkl
+    data/processed/features.parquet
+    data/processed/csi.parquet
+    data/processed/targets.parquet
+"""
+
+import os
+import sys
+from pathlib import Path
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+HF_REPO = "zyezehua/fmsi-artifacts"
+
+FILES = [
+    ("models/model_h5d.pkl",              "model_h5d.pkl"),
+    ("models/model_h21d.pkl",             "model_h21d.pkl"),
+    ("models/model_h63d.pkl",             "model_h63d.pkl"),
+    ("data/processed/features.parquet",   "data/features.parquet"),
+    ("data/processed/csi.parquet",        "data/csi.parquet"),
+    ("data/processed/targets.parquet",    "data/targets.parquet"),
+]
+
+
+def main():
+    try:
+        from huggingface_hub import HfApi, create_repo
+    except ImportError:
+        print("ERROR: huggingface_hub not installed. Run: pip install huggingface_hub")
+        sys.exit(1)
+
+    token = os.getenv("HF_TOKEN")
+    api   = HfApi(token=token)
+
+    # Create repo if it doesn't exist
+    try:
+        create_repo(HF_REPO, repo_type="dataset", exist_ok=True, token=token)
+        print(f"Repo ready: https://huggingface.co/datasets/{HF_REPO}")
+    except Exception as exc:
+        print(f"create_repo: {exc}")
+
+    success, skipped, failed = [], [], []
+
+    for local_path, hf_path in FILES:
+        p = Path(local_path)
+        if not p.exists():
+            print(f"  SKIP (not found): {local_path}")
+            skipped.append(local_path)
+            continue
+
+        size_mb = p.stat().st_size / 1_048_576
+        print(f"  Uploading {local_path} ({size_mb:.1f} MB) → {hf_path} ...")
+        try:
+            api.upload_file(
+                path_or_fileobj=str(p),
+                path_in_repo=hf_path,
+                repo_id=HF_REPO,
+                repo_type="dataset",
+                commit_message=f"Upload {hf_path}",
+            )
+            print(f"    ✓ {hf_path}")
+            success.append(local_path)
+        except Exception as exc:
+            print(f"    ✗ FAILED: {exc}")
+            failed.append((local_path, str(exc)))
+
+    print("\n── Upload summary ──────────────────")
+    print(f"  Uploaded:  {len(success)}")
+    print(f"  Skipped:   {len(skipped)}")
+    print(f"  Failed:    {len(failed)}")
+    if failed:
+        for path, err in failed:
+            print(f"    {path}: {err}")
+    print(f"\nView: https://huggingface.co/datasets/{HF_REPO}")
+
+
+if __name__ == "__main__":
+    main()
