@@ -41,6 +41,7 @@ def train_horizon(
     horizon: int,
     weights: dict = None,
     artifacts_dir: str = "models",
+    csi_composite: pd.Series = None,
 ) -> Dict[str, object]:
     """
     Train all ensembles for a single prediction horizon.
@@ -150,6 +151,18 @@ def train_horizon(
             dir_metrics = {"direction_accuracy_last_500": round(acc, 3)}
             logger.info("Direction accuracy (horizon %dd, last 500d): %.1f%%", horizon, acc * 100)
 
+    # ── Fit regime detector (if CSI composite provided) ───────────────────
+    from .regime_detector import RegimeDetector
+    regime_detector = None
+    if csi_composite is not None:
+        try:
+            rd = RegimeDetector()
+            rd.fit(csi_composite)
+            regime_detector = rd
+            logger.info("RegimeDetector fitted for horizon %dd.", horizon)
+        except Exception as exc:
+            logger.warning("RegimeDetector fit failed: %s", exc)
+
     # ── Persist artifact ──────────────────────────────────────────────────
     os.makedirs(artifacts_dir, exist_ok=True)
     artifact = {
@@ -164,6 +177,7 @@ def train_horizon(
         "stress_metrics":       {"cv_mae": avg_mae},
         "direction_metrics":    dir_metrics,
         "class_thresholds":     {"q30": cls_q30, "q50": cls_q50, "q70": cls_q70},
+        "regime_detector":      regime_detector,
     }
     path = os.path.join(artifacts_dir, f"model_h{horizon}d.pkl")
     with open(path, "wb") as f:
@@ -178,12 +192,16 @@ def train_all_horizons(
     horizons: List[int] = None,
     weights: dict = None,
     artifacts_dir: str = "models",
+    csi_composite: pd.Series = None,
 ) -> Dict[int, dict]:
     horizons = horizons or [5, 21, 63]
     results = {}
     for h in horizons:
         try:
-            results[h] = train_horizon(features, targets, h, weights, artifacts_dir)
+            results[h] = train_horizon(
+                features, targets, h, weights, artifacts_dir,
+                csi_composite=csi_composite,
+            )
         except Exception as exc:
             logger.error("Failed to train horizon %dd: %s", h, exc)
     return results

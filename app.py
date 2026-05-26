@@ -161,6 +161,41 @@ def load_artifacts():
     _get_artifact_dir()
 
 
+@st.cache_data(ttl=3600, show_spinner="Detecting market regime...")
+def get_current_regime():
+    """
+    Return (regime_int, regime_name, regime_series) for the current market.
+
+    Tries to load the fitted RegimeDetector from the h5d artifact first.
+    Falls back to fitting a fresh one on-the-fly from CSI data if needed.
+    """
+    try:
+        _, csi = load_data()
+        csi_composite = csi["csi_composite"].dropna()
+
+        # Try artifact first
+        rd = None
+        try:
+            from src.models.trainer import load_artifact
+            artifact = load_artifact(5, "models")
+            rd = artifact.get("regime_detector")
+        except Exception:
+            pass
+
+        # Fall back: fit fresh detector
+        if rd is None:
+            from src.models.regime_detector import RegimeDetector
+            rd = RegimeDetector()
+            rd.fit(csi_composite)
+
+        regime_series = rd.predict(csi_composite)
+        regime_int, regime_name = rd.current_regime(csi_composite)
+        return regime_int, regime_name, regime_series
+    except Exception as exc:
+        logger.warning("get_current_regime failed: %s", exc)
+        return None, "N/A", None
+
+
 @st.cache_data(ttl=3600, show_spinner="Running predictions...")
 def get_predictions(as_of: str | None = None):
     features, csi = load_data()
@@ -569,6 +604,49 @@ def render_snapshot(predictions: dict, csi: pd.DataFrame):
             f"font-size:13px'>{stress_class.upper()}</span>"
             f"<span style='color:#888;font-size:12px;margin-left:12px'>as of {pred_date}</span>"
             f"</div>",
+            unsafe_allow_html=True,
+        )
+
+    # ── Regime display ────────────────────────────────────────────────────
+    REGIME_COLORS = {0: "#2ECC71", 1: "#F39C12", 2: "#E74C3C"}
+    try:
+        regime_int, regime_name, regime_series = get_current_regime()
+        if regime_name != "N/A" and regime_int is not None:
+            regime_color = REGIME_COLORS.get(regime_int, "#888")
+            # Count consecutive days in the current regime
+            days_in_regime = 0
+            if regime_series is not None and not regime_series.dropna().empty:
+                rs = regime_series.dropna()
+                # Walk back from the end while regime matches
+                for v in reversed(rs.values):
+                    if int(v) == regime_int:
+                        days_in_regime += 1
+                    else:
+                        break
+            days_str = f"{days_in_regime}d in current regime" if days_in_regime else ""
+            st.markdown(
+                f"<div style='text-align:center;margin-top:6px'>"
+                f"<span style='color:#888;font-size:11px;text-transform:uppercase;"
+                f"letter-spacing:1px;margin-right:8px'>HMM Regime:</span>"
+                f"<span style='background:{regime_color};color:#fff;padding:3px 12px;"
+                f"border-radius:20px;font-weight:bold;letter-spacing:1px;"
+                f"font-size:12px'>{regime_name.upper()}</span>"
+                f"<span style='color:#666;font-size:11px;margin-left:10px'>{days_str}</span>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown(
+                "<div style='text-align:center;margin-top:6px'>"
+                "<span style='color:#888;font-size:11px'>HMM Regime: N/A</span>"
+                "</div>",
+                unsafe_allow_html=True,
+            )
+    except Exception:
+        st.markdown(
+            "<div style='text-align:center;margin-top:6px'>"
+            "<span style='color:#888;font-size:11px'>HMM Regime: N/A</span>"
+            "</div>",
             unsafe_allow_html=True,
         )
 

@@ -30,8 +30,8 @@ FILES = [
     ("models/model_h21d.pkl",             "model_h21d.pkl"),
     ("models/model_h63d.pkl",             "model_h63d.pkl"),
     ("data/processed/features.parquet",   "data/features.parquet"),
-    ("data/processed/csi.parquet",        "data/csi.parquet"),
-    ("data/processed/targets.parquet",    "data/targets.parquet"),
+    ("data/labels/csi.parquet",           "data/csi.parquet"),
+    ("data/labels/targets.parquet",       "data/targets.parquet"),
 ]
 
 
