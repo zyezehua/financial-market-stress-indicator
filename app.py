@@ -116,27 +116,49 @@ def _get_data_dir() -> str:
     from huggingface_hub import hf_hub_download
 
     # HF path → expected local path (matching load_features / load_csi conventions)
-    mapping = [
+    required = [
         ("data/features.parquet", Path("data/processed/features.parquet")),
         ("data/csi.parquet",      Path("data/labels/csi.parquet")),
         ("data/targets.parquet",  Path("data/labels/targets.parquet")),
     ]
+    # OOS walk-forward predictions — optional (skipped if not yet on HF Hub)
+    optional = [
+        ("data/oos_stress_h5d.parquet",     Path("data/processed/oos_stress_h5d.parquet")),
+        ("data/oos_direction_h5d.parquet",  Path("data/processed/oos_direction_h5d.parquet")),
+        ("data/oos_stress_h21d.parquet",    Path("data/processed/oos_stress_h21d.parquet")),
+        ("data/oos_direction_h21d.parquet", Path("data/processed/oos_direction_h21d.parquet")),
+        ("data/oos_stress_h63d.parquet",    Path("data/processed/oos_stress_h63d.parquet")),
+        ("data/oos_direction_h63d.parquet", Path("data/processed/oos_direction_h63d.parquet")),
+    ]
 
-    if mapping[0][1].exists():
-        return str(mapping[0][1].parent)
+    if required[0][1].exists():
+        return str(required[0][1].parent)
 
     try:
         hf_token = st.secrets.get("HF_TOKEN", None) or os.getenv("HF_TOKEN")
         with st.spinner("Downloading data from Hugging Face Hub (~7 MB)..."):
-            for hf_fname, local_path in mapping:
+            for hf_fname, local_path in required:
                 local_path.parent.mkdir(parents=True, exist_ok=True)
                 cached = hf_hub_download(
                     repo_id=HF_REPO, repo_type="dataset",
                     filename=hf_fname, token=hf_token,
                 )
                 shutil.copy2(cached, local_path)
+        # Download OOS files if available — silently skip missing ones
+        for hf_fname, local_path in optional:
+            if local_path.exists():
+                continue
+            try:
+                cached = hf_hub_download(
+                    repo_id=HF_REPO, repo_type="dataset",
+                    filename=hf_fname, token=hf_token,
+                )
+                local_path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(cached, local_path)
+            except Exception:
+                pass  # OOS files not yet uploaded — S3 will fall back to in-sample
         logger.info("Data downloaded to data/processed/ and data/labels/")
-        return str(mapping[0][1].parent)
+        return str(required[0][1].parent)
     except Exception as exc:
         st.error(f"Could not load data artifacts: {exc}")
         st.stop()
@@ -833,34 +855,46 @@ def _run_strategy_backtest(
 
     dir_sig = None
     dir_sig_cutoff = None
-    if has_model and "S3" in strategies:
-        try:
-            from src.models.trainer import load_artifact
-            features, csi_full = load_data()
-            artifact = load_artifact(5, "models")
-            X = features.reindex(columns=artifact["feature_names"], fill_value=0)
-            dir_ens = artifact.get("down_risk_ensemble") or artifact.get("direction_ensemble")
-            if dir_ens is not None:
-                raw = dir_ens.predict(X)
-                prob = dir_ens.predict_proba(X)
-                lmap = {-1: "Down", 0: "Neutral", 1: "Up"}
-                full_sig = pd.DataFrame({
-                    "dir_pred":      [lmap.get(int(p), "Neutral") for p in raw],
-                    "dir_down_prob": prob[:, 0],
-                    "dir_up_prob":   prob[:, 2],
-                }, index=X.index)
-                # Restrict to post-training dates only to prevent in-sample lookahead.
-                # The model was trained on all data up to train_data_end, so predictions
-                # on those dates are in-sample and would inflate S3 performance.
-                train_end = artifact.get("train_data_end")
-                if train_end:
-                    cutoff = pd.Timestamp(train_end)
-                    dir_sig_cutoff = cutoff
-                    dir_sig = full_sig[full_sig.index > cutoff]
-                else:
-                    dir_sig = full_sig
-        except Exception:
-            pass
+    dir_sig_source = None
+    if "S3" in strategies:
+        # ── Priority 1: pre-computed OOS walk-forward predictions (no lookahead) ──
+        oos_path = Path("data/processed/oos_direction_h5d.parquet")
+        if oos_path.exists():
+            try:
+                oos = pd.read_parquet(oos_path)
+                if {"down_proba", "up_proba"}.issubset(oos.columns):
+                    dir_sig = oos.rename(columns={
+                        "down_proba": "dir_down_prob",
+                        "up_proba":   "dir_up_prob",
+                    })[["dir_down_prob", "dir_up_prob"]]
+                    dir_sig_source = "oos"
+            except Exception:
+                pass
+
+        # ── Priority 2: in-sample model predictions (restricted to post-training) ──
+        if dir_sig is None and has_model:
+            try:
+                from src.models.trainer import load_artifact
+                features, _ = load_data()
+                artifact = load_artifact(5, "models")
+                X = features.reindex(columns=artifact["feature_names"], fill_value=0)
+                dir_ens = artifact.get("down_risk_ensemble") or artifact.get("direction_ensemble")
+                if dir_ens is not None:
+                    prob = dir_ens.predict_proba(X)
+                    full_sig = pd.DataFrame({
+                        "dir_down_prob": prob[:, 0],
+                        "dir_up_prob":   prob[:, 2],
+                    }, index=X.index)
+                    train_end = artifact.get("train_data_end")
+                    if train_end:
+                        cutoff = pd.Timestamp(train_end)
+                        dir_sig_cutoff = cutoff
+                        dir_sig = full_sig[full_sig.index > cutoff]
+                    else:
+                        dir_sig = full_sig
+                    dir_sig_source = "in_sample"
+            except Exception:
+                pass
 
     output = run_all_strategies(
         spy, csi_sig, list(strategies), list(priority),
@@ -875,6 +909,7 @@ def _run_strategy_backtest(
         "csi_sig":         csi_sig,
         "spy":             spy,
         "dir_sig_cutoff":  dir_sig_cutoff.isoformat() if dir_sig_cutoff else None,
+        "dir_sig_source":  dir_sig_source,
     }
 
 
@@ -1091,13 +1126,21 @@ def render_strategy_backtest(csi: pd.DataFrame):
             )
             selected_sids = [STRATEGY_OPTIONS[l] for l in selected_labels]
             if any("S3" in s for s in selected_sids):
-                st.warning(
-                    "**S3 is not suitable for historical backtesting.** "
-                    "The direction model is trained on all available data, so predictions "
-                    "on historical dates are in-sample and will inflate performance. "
-                    "S3 is only meaningful as a live/forward-looking signal.",
-                    icon="⚠️",
-                )
+                oos_available = Path("data/processed/oos_direction_h5d.parquet").exists()
+                if oos_available:
+                    st.info(
+                        "**S3 will use walk-forward OOS predictions** (no lookahead bias). "
+                        "Run `python scripts/run_walk_forward.py` to refresh these predictions.",
+                        icon="✅",
+                    )
+                else:
+                    st.warning(
+                        "**S3 OOS predictions not found.** Run "
+                        "`python scripts/run_walk_forward.py` first to generate honest "
+                        "walk-forward predictions. Until then S3 uses in-sample signals "
+                        "restricted to post-training dates only.",
+                        icon="⚠️",
+                    )
             for sid in selected_sids:
                 meta = STRATEGY_META.get(sid, {})
                 st.caption(f"• **{meta.get('label', sid)}**: {meta.get('desc', '')}")
@@ -1152,23 +1195,31 @@ def render_strategy_backtest(csi: pd.DataFrame):
     metrics         = output["metrics"]
     csi_sig         = output["csi_sig"]
     dir_sig_cutoff  = output.get("dir_sig_cutoff")
+    dir_sig_source  = output.get("dir_sig_source")
 
-    # S3 lookahead warning
+    # S3 signal source banner
     has_s3 = any("S3" in n for n in results)
-    if has_s3 and dir_sig_cutoff:
-        st.warning(
-            f"**S3 lookahead notice**: The direction model was trained on all data up to "
-            f"**{dir_sig_cutoff[:10]}**. The model direction signal is only applied after "
-            f"that date — prior dates fall back to S1 (no direction overlay). "
-            f"Historical S3 performance before this cutoff is identical to S1.",
-            icon="⚠️",
-        )
-    elif has_s3 and not dir_sig_cutoff:
-        st.error(
-            "**S3 warning**: Could not determine model training cutoff. "
-            "S3 results may reflect in-sample lookahead bias — treat with caution.",
-            icon="🚨",
-        )
+    if has_s3:
+        if dir_sig_source == "oos":
+            st.success(
+                "**S3 is using walk-forward OOS predictions** — no lookahead bias. "
+                "Direction signal comes from `oos_direction_h5d.parquet`.",
+                icon="✅",
+            )
+        elif dir_sig_source == "in_sample" and dir_sig_cutoff:
+            st.warning(
+                f"**S3 lookahead notice**: Using in-sample model predictions. "
+                f"Direction signal only applied after training cutoff "
+                f"(**{dir_sig_cutoff[:10]}**) — prior dates use S1 base. "
+                f"Run `python scripts/run_walk_forward.py` for honest OOS signals.",
+                icon="⚠️",
+            )
+        else:
+            st.error(
+                "**S3 warning**: No direction signal available — S3 is behaving as S1. "
+                "Run `python scripts/run_walk_forward.py` to generate OOS predictions.",
+                icon="🚨",
+            )
 
     # Winner banner
     ranked   = sorted([m for m in metrics if m.get("rank") == 1], key=lambda x: x.get("rank", 99))

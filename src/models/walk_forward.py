@@ -252,19 +252,22 @@ def run_walk_forward(
                     logger.warning("DownRiskEnsemble skipped (fold %d): %s", n_folds + 1, exc)
                     ens_d = dir_ens
 
-                preds_d = ens_d.predict(X_d_test)
+                preds_d  = ens_d.predict(X_d_test)
+                all_prob = ens_d.predict_proba(X_d_test)   # shape (N, 3): [Down, Neutral, Up]
                 if hasattr(ens_d, "predict_down_proba"):
                     down_probas = ens_d.predict_down_proba(X_d_test)
                 else:
-                    down_probas = ens_d.predict_proba(X_d_test)[:, 0]
-                for date, pred, actual, dp in zip(
-                    X_d_test.index, preds_d, y_d_test.values, down_probas
+                    down_probas = all_prob[:, 0]
+                up_probas = all_prob[:, 2]
+                for date, pred, actual, dp, up in zip(
+                    X_d_test.index, preds_d, y_d_test.values, down_probas, up_probas
                 ):
                     direction_records.append({
                         "date":             date,
                         "direction_pred":   _direction_label(pred),
                         "direction_actual": _direction_label(actual),
                         "down_proba":       round(float(dp), 4),
+                        "up_proba":         round(float(up), 4),
                     })
 
         n_folds += 1
