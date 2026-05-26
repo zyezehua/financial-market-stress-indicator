@@ -1,0 +1,128 @@
+# =============================================================================
+# Daily Market Data Refresh — GitHub Actions Workflow
+# =============================================================================
+#
+# REQUIRED SECRETS (set in GitHub → Settings → Secrets and variables → Actions):
+#
+#   FRED_API_KEY        — FRED (Federal Reserve Economic Data) API key
+#                         Get one free at: https://fred.stlouisfed.org/docs/api/api_key.html
+#
+#   HF_TOKEN            — Hugging Face write token
+#                         Create at: https://huggingface.co/settings/tokens
+#                         Must have write access to zyezehua/fmsi-artifacts
+#
+#   ANTHROPIC_API_KEY   — Anthropic Claude API key (for LLM narrative, optional in
+#                         daily run since we use --no-pdf, but keep it available)
+#                         Get at: https://console.anthropic.com/
+#
+#   STREAMLIT_API_KEY   — Streamlit Cloud management API key
+#                         Get at: https://share.streamlit.io/ → Account settings
+#
+#   STREAMLIT_APP_ID    — Your Streamlit Cloud app ID (UUID)
+#                         Find it in the Streamlit Cloud dashboard URL or app settings
+#                         Example: "abc12345-1234-5678-abcd-123456789abc"
+#
+# =============================================================================
+
+name: Daily Market Data Refresh
+
+on:
+  # Run every day at 06:00 UTC (after US market close + overnight data settles)
+  schedule:
+    - cron: '0 6 * * *'
+
+  # Allow manual trigger for testing without waiting for the schedule
+  workflow_dispatch:
+
+jobs:
+  refresh:
+    name: Refresh market data and rebuild predictions
+    runs-on: ubuntu-latest
+    timeout-minutes: 30  # Fail fast if something hangs
+
+    env:
+      # Inject secrets as environment variables for the Python scripts
+      FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
+    steps:
+      # ------------------------------------------------------------------
+      # 1. Check out the repository
+      # ------------------------------------------------------------------
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ------------------------------------------------------------------
+      # 2. Set up Python 3.11 — pinned for scikit-learn / lightgbm / xgboost
+      #    compatibility with the serialized .pkl model files.
+      #    Do NOT upgrade to 3.12+ without retraining and re-serializing models.
+      # ------------------------------------------------------------------
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # ------------------------------------------------------------------
+      # 3. Cache pip dependencies — keyed on requirements.txt hash so the
+      #    cache is automatically invalidated when dependencies change.
+      # ------------------------------------------------------------------
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-py311-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-py311-
+
+      # ------------------------------------------------------------------
+      # 4. Install dependencies
+      # ------------------------------------------------------------------
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # ------------------------------------------------------------------
+      # 5. Run the daily pipeline
+      #    --no-pdf  → skip PDF report generation (avoids reportlab font/
+      #                  rendering issues in headless CI environments)
+      #    Exit code != 0 will fail this step and skip the upload step.
+      # ------------------------------------------------------------------
+      - name: Run daily pipeline
+        run: python scripts/daily_run.py --no-pdf
+
+      # ------------------------------------------------------------------
+      # 6. Upload updated parquet artifacts to Hugging Face Hub
+      #    Only runs if the daily pipeline succeeded (default behavior).
+      #    Model .pkl files are not re-uploaded here because they don't
+      #    change on daily runs (retraining is a separate, manual process).
+      # ------------------------------------------------------------------
+      - name: Upload artifacts to Hugging Face Hub
+        run: python scripts/upload_artifacts.py
+
+      # ------------------------------------------------------------------
+      # 7. Reboot the Streamlit Cloud app so it picks up the fresh data
+      #    from Hugging Face Hub without waiting for its next cold start.
+      #
+      #    Set STREAMLIT_APP_ID secret to your app's UUID (found in the
+      #    Streamlit Cloud dashboard).  This step is non-fatal: if the
+      #    reboot API call fails the workflow still reports success so
+      #    you don't get false-alarm failure notifications.
+      # ------------------------------------------------------------------
+      - name: Reboot Streamlit Cloud app
+        continue-on-error: true
+        run: |
+          echo "Sending reboot request to Streamlit Cloud..."
+          HTTP_STATUS=$(curl --silent --output /dev/null --write-out "%{http_code}" \
+            --request POST \
+            --header "Authorization: Bearer ${{ secrets.STREAMLIT_API_KEY }}" \
+            --header "Content-Type: application/json" \
+            "https://api.streamlit.io/v1/apps/${{ secrets.STREAMLIT_APP_ID }}/reboot")
+          echo "Streamlit API response status: $HTTP_STATUS"
+          if [ "$HTTP_STATUS" -ge 200 ] && [ "$HTTP_STATUS" -lt 300 ]; then
+            echo "Reboot request accepted."
+          else
+            echo "Reboot request returned HTTP $HTTP_STATUS — check STREAMLIT_APP_ID and STREAMLIT_API_KEY secrets."
+            exit 1
+          fi
