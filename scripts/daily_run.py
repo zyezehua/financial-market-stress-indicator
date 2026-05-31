@@ -77,7 +77,18 @@ def run(date: str = None, use_llm: bool = False, gen_pdf: bool = True, gen_html:
     predictions = predict_latest(features, csi, horizons, artifacts_dir=artifacts, as_of=date)
 
     if not predictions:
-        logger.error("No predictions generated. Ensure models are trained first (run train_model.py).")
+        models_present = any(
+            os.path.exists(os.path.join(artifacts, f"model_h{h}d.pkl")) for h in horizons
+        )
+        if models_present:
+            logger.error("Model artifacts present but prediction failed — no predictions generated.")
+            sys.exit(1)
+        logger.warning(
+            "No model artifacts found in '%s' — skipping prediction/SHAP/report steps. "
+            "Data refresh (features/CSI/targets) completed and will still be uploaded. "
+            "Run train_model.py and upload models to enable predictions.",
+            artifacts,
+        )
         return
 
     # ── 5. Compute SHAP + attribution ──────────────────────────────────────

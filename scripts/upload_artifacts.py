@@ -96,6 +96,11 @@ def main():
             print(f"    {path}: {err}")
     print(f"\nView: https://huggingface.co/datasets/{HF_REPO}")
 
+    # Surface upload failures as a non-zero exit so CI fails loudly instead of
+    # reporting a false green. Missing files (skipped) are not failures.
+    if failed:
+        sys.exit(1)
+
 
 if __name__ == "__main__":
     main()

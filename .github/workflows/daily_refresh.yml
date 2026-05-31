@@ -111,14 +111,21 @@ jobs:
       #    you don't get false-alarm failure notifications.
       # ------------------------------------------------------------------
       - name: Reboot Streamlit Cloud app
-        continue-on-error: true
+        env:
+          STREAMLIT_API_KEY: ${{ secrets.STREAMLIT_API_KEY }}
+          STREAMLIT_APP_ID:  ${{ secrets.STREAMLIT_APP_ID }}
         run: |
+          if [ -z "$STREAMLIT_API_KEY" ] || [ -z "$STREAMLIT_APP_ID" ]; then
+            echo "STREAMLIT_API_KEY / STREAMLIT_APP_ID not set — skipping Streamlit reboot."
+            echo "(The app will still pick up fresh data on its next cache refresh / cold start.)"
+            exit 0
+          fi
           echo "Sending reboot request to Streamlit Cloud..."
           HTTP_STATUS=$(curl --silent --output /dev/null --write-out "%{http_code}" \
             --request POST \
-            --header "Authorization: Bearer ${{ secrets.STREAMLIT_API_KEY }}" \
+            --header "Authorization: Bearer $STREAMLIT_API_KEY" \
             --header "Content-Type: application/json" \
-            "https://api.streamlit.io/v1/apps/${{ secrets.STREAMLIT_APP_ID }}/reboot")
+            "https://api.streamlit.io/v1/apps/$STREAMLIT_APP_ID/reboot")
           echo "Streamlit API response status: $HTTP_STATUS"
           if [ "$HTTP_STATUS" -ge 200 ] && [ "$HTTP_STATUS" -lt 300 ]; then
             echo "Reboot request accepted."
